@@ -14,23 +14,21 @@ N_points_conv = [100,500,1000,2000,3000,4000];
 numerov_energies = zeros(1,length(N_points_conv));
 
 for i = 1:length(N_points_conv)
-    [psi, energies, r_points] = numerov_solver(r_box, r_start, N_points_conv(i), l, n_lim);
+    [psi, energies] = numerov_solver(r_box, r_start, N_points_conv(i), l, n_lim);
     numerov_energies(i) = energies(1);
 end
 
 figure
 hold on;
-plot(N_points_conv, abs(numerov_energies - (-1/2)), "x-", "MarkerSize", 10, "MarkerEdgeColor", "r");
+plot(N_points_conv, abs(numerov_energies - (-1/2)), "x-", "MarkerSize", 10, "MarkerEdgeColor", r);
 set(gca, 'YScale', 'log') 
 
 title(sprintf( ...
     'Convergence Study (Numerov Method): l = %d, r_{box} = %.0f', ...
     l, r_box), ...
-    'FontSize', 15)
+    'FontSize', 13)
 xlabel("N_{points}", "FontSize", 15)
 ylabel("abs(E_1 - (-1/2))", "FontSize", 15)
-
-exportgraphics(gcf, "convergence_study.png", 'Resolution', 300);
 
 %% plot: hydrogen energy levels (numerov)
 
@@ -57,36 +55,18 @@ exportgraphics(gcf, filename, 'Resolution', 300);
 
 %% plot: comparing wave functions for each energy state 
 
-figure
-hold on
-
-plot_n_lim = 5;
-
-for n = 1:plot_n_lim
-    plot(r_points(2:end-1), psi(:,n).^2, ...
-        'LineWidth', 1.5, ...
-        'DisplayName', sprintf('n = %d', n));
-end
-
-xlabel('r (a_0)', 'FontSize', 15)
-ylabel('|\psi_n(r)|^2', 'FontSize', 15)
-
-title(sprintf( ...
-    'Hydrogen Radial Probability Densities (l = %d, N_{points} = %d, r_{box} = %.0f)', ...
-    l, N_points, r_box), ...
-    'FontSize', 14)
-
-legend('Location', 'northeast', 'FontSize', 12)
-grid on
-xlim([0 r_box])
-
-filename = sprintf('probability_densities_l%d_N%d_r%.2f.png', l, N_points, r_box);
-
-exportgraphics(gcf, filename, 'Resolution', 300);
+% figure
+% hold on
+% 
+% plot_n_lim = 5;
+% 
+% for i = 1:plot_n_lim
+%     plot(r_points(2:end-1), psi(:,i) .^ 2);
+% end
 
 %% functions
 
-function [psi, energies, r_points] = numerov_solver(r_box, r_start, N_points, l, n_lim)
+function [psi, energies] = numerov_solver(r_box, r_start, N_points, l, n_lim)
     % inputs (all in atomic units):
     % r_box: endpoint for r_points, infinite potential (hard wall)
     % r_start: r_points(1) <-- not 0 because singularity
