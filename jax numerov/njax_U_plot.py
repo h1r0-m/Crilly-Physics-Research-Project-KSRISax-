@@ -3,7 +3,6 @@ import jax
 jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp
-from jax import jacrev, jit
 import os
 import matplotlib.pyplot as plt
 from njax_functions import numerov_solver, U_solver
@@ -39,18 +38,19 @@ def main():
 
     # theory values
     theory_x = jnp.linspace(0,4e6)
-    theory_y = 3/2 * 8.617e-5 * theory_x + U_array[0]
+    theory_y = 3/2 * 8.617e-5 * theory_x
 
     # global figure (no close up)
 
     plt.figure(figsize=(10,6))
-    plt.plot(temps, U_array, linestyle="-", marker="x", color="red", label = "Numerov Simualation")
-    plt.plot(theory_x, theory_y, linestyle = "-", color = "blue", label = "Theory: 3/2 k_B T + E_1")
+    plt.plot(temps, U_array, linestyle="-", marker="x", color="red", label = "Numerov Simulation")
+    plt.plot(theory_x, theory_y, linestyle = "-", color = "blue", label = "Theory: 3/2 k_B T")
     plt.xlabel("Temperature (K)", fontsize=12)
     plt.ylabel("Internal Energy (eV)", fontsize=12)
     plt.xlim((0,3e6))
     plt.title(f"Internal Energy vs Temperature (r_box={r_box}, l={l})", fontsize=14)
     plt.grid(True)
+    plt.legend()
 
     # saving
     folder_name = "plots" 
@@ -67,12 +67,12 @@ def main():
 
     # close up plot (const r_box)
     plt.figure(figsize=(10,6))
-    plt.plot(temps, U_array, linestyle="-", marker="x", color="red", label = "Numerov Simualation")
-    plt.plot(theory_x, theory_y, linestyle = "-", color = "blue", label = "Theory: 3/2 k_B T + E_1")
+    plt.plot(temps, U_array, linestyle="-", marker="x", color="red", label = "Numerov Simulation")
+    plt.plot(theory_x, theory_y, linestyle = "-", color = "blue", label = "Theory: 3/2 k_B T")
     plt.xlabel("Temperature (K)", fontsize=12)
     plt.ylabel("Internal Energy (eV)", fontsize=12)
     plt.xlim((0,1e5))
-    plt.ylim((-15,5))
+    plt.ylim((-15,15))
     plt.title(f"Internal Energy vs Temperature (r_box={r_box}, l={l}) - Close Up", fontsize=14)
     plt.grid(True)
     plt.legend()
@@ -107,7 +107,7 @@ def main():
     U_array_2 *= 27.2114
 
     plt.figure(figsize=(10,6))
-    plt.plot(r_box_array, U_array_2, linestyle="-", marker="x", color="red", label = "Numerov Simualation")
+    plt.plot(r_box_array, U_array_2, linestyle="-", marker="x", color="red", label = "Numerov Simulation")
     plt.xlabel("r_box (Ha)", fontsize=12)
     plt.xscale("log")
     plt.ylabel("Internal Energy (eV)", fontsize=12)

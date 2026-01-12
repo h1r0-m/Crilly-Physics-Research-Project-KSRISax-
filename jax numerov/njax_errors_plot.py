@@ -40,12 +40,13 @@ def main():
 
     # error vs n
     plt.figure(figsize=(10,6))
-    plt.plot(N_points_plot, errors, linestyle="-", marker="x", color="red")
+    plt.plot(N_points_plot, errors, linestyle="-", marker="x", color="red", label = "Numerov Simulation")
     plt.xlabel("N_points", fontsize=12)
     plt.ylabel("abs(E1 - (-1/2))", fontsize=12)
     plt.yscale("log")
     plt.title(f"Error vs N_points (r_box={r_box}, l={l})", fontsize=14)
     plt.grid(True)
+    plt.legend()
 
     # saving
     folder_name = "plots" 
@@ -62,11 +63,12 @@ def main():
 
     # time vs n
     plt.figure(figsize=(10,6))
-    plt.plot(N_points_plot, times, linestyle="-", marker="x", color="blue")
+    plt.plot(N_points_plot, times, linestyle="-", marker="x", color="blue", label = "Numerov Simulation")
     plt.xlabel("N_points", fontsize=12)
     plt.ylabel("Time (s)", fontsize=12)
     plt.title(f"Time vs N_points (r_box={r_box}, l={l})", fontsize=14)
     plt.grid(True)
+    plt.legend()
 
     time_filename = os.path.join(plot_dir, f"time_rbox{r_box}_l{l}.png")
     plt.savefig(time_filename, dpi=300)
