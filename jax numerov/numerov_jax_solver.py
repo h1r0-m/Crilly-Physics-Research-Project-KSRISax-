@@ -1,93 +1,11 @@
-# %% Benchkeeping + file management
+# housekeeping
+
 import jax
 import jax.numpy as jnp
+import jax.scipy.linalg as jla
 from jax import jit
 from functools import partial
-import jax.scipy.linalg as jla
-import matplotlib.pyplot as plt
-import os
-import time
-import numpy as np
 
-# enables colorful tracebacks which was useful for debugging
-from rich.traceback import install
-install() 
-
-# %% main
-
-# wanted functions to be all organized at the bottom so defined main sequence
-def main():
-
-    # initialization
-    r_box = 30
-    r_start = 1e-5
-    N_points = 1000
-    l = 0
-
-    energies, psi = numerov_solver(r_box, r_start, N_points, l)
-
-    # %% plotting
-
-    # hydrogen energy levels
-
-    n_plot_lim = 10
-
-    x_plot = jnp.linspace(1,n_plot_lim)
-    y_plot = -1/(2*x_plot ** 2)
-
-    plt.figure(figsize = (10,6))
-    plt.plot(range(1,n_plot_lim + 1), energies[:n_plot_lim], marker = "x", label = "Numerov Matrix (JAX)")
-    plt.plot(x_plot, y_plot, linestyle = "-", label = "Theory (E = -1/(2n^2))")
-    plt.xlabel("n")
-    plt.ylabel("Energy (Ha)")
-    plt.title(f"Hydrogen Energy Levels: r_box = {r_box}, N_points = {N_points}, l = {l}, E_1 = {energies[0]:.5f}")
-    plt.grid(True)
-    plt.legend()
-    plt.xlim((1,n_plot_lim))
-    
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    save_path = os.path.join(script_dir, f"hydrogen_rbox{r_box}_N{N_points}_l{l}_E1{energies[0]:.5f}.png")
-    plt.savefig(save_path)
-    plt.close()
-
-    # error and time vs N_points
-
-    N_points_plot = np.arange(50,1050,50)
-    n_plot_test = len(N_points_plot)
-    errors = np.zeros(n_plot_test)
-    times = np.zeros(n_plot_test)
-
-    for i in range(n_plot_test):
-        start = time.time()
-        energies, psi = numerov_solver(r_box, r_start, N_points_plot[i], l)
-        energies.block_until_ready()
-        end = time.time()
-        errors[i] = abs(energies[0] - (-1/2))
-        times[i] = end - start
-
-    # error vs n
-    plt.figure(figsize=(10,6))
-    plt.plot(N_points_plot, errors, linestyle="-", marker="x", color="red")
-    plt.xlabel("N_points", fontsize=12)
-    plt.ylabel("abs(E1 - (-1/2))", fontsize=12)
-    plt.yscale("log")
-    plt.title(f"Error vs N_points (r_box={r_box}, l={l})", fontsize=14)
-    plt.grid(True)
-
-    error_filename = os.path.join(script_dir, f"error_rbox{r_box}_l{l}.png")
-    plt.savefig(error_filename, dpi=300)
-
-    # time vs n
-    plt.figure(figsize=(10,6))
-    plt.plot(N_points_plot, times, linestyle="-", marker="x", color="blue")
-    plt.xlabel("N_points", fontsize=12)
-    plt.ylabel("Time (s)", fontsize=12)
-    plt.title(f"Time vs N_points (r_box={r_box}, l={l})", fontsize=14)
-    plt.grid(True)
-
-    time_filename = os.path.join(script_dir, f"time_rbox{r_box}_l{l}.png")
-    plt.savefig(time_filename, dpi=300)
-    
 # %% functions
 
 # @jit for faster running but N_points is a static argument so using @partial
@@ -166,4 +84,23 @@ def cholesky_solve(A,B):
 
     return eigvals, eigvecs
 
-main()
+@jit
+def U_solver(energies, temp):
+    """ 
+    implementing boltzmann statistics for the calculation of
+    internal energy as a function of temperature and r_max
+
+    inputs: 
+    energies - 1D array of the eigenvalues from numerov_solver
+    temp - scalar temperature value (in Ha, 1 Ha = 315,775 K)
+    r_max - scalar value representing confinement and density
+
+    outputs: 
+    U - scalar value of the internal energy (in Ha, 1 Ha = 27.2 eV)
+    """
+
+    f_i = jnp.exp(-energies/temp) / sum(jnp.exp(-energies/temp))
+
+    U = sum(energies * f_i)
+
+    return U
