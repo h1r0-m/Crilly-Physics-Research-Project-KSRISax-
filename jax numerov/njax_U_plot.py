@@ -19,7 +19,7 @@ def main():
     r_box = 30
     N_points = 300
     r_start = 1e-5
-    l_max = 10
+    l_max = 100
     
     # for varying temperature
     temps = jnp.logspace(-3,1, num = 50)

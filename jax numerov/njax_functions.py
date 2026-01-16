@@ -117,13 +117,54 @@ def U_solver(temp, r_box, r_start, N_points, l_max):
     # resizing matrix so it can be used for matrix multiplication
     g_l_matrix = g_l[:, None]
 
-    # calculating boltzmann factor using the degeneracy factor and boltzmann statistics
+    # calculating weighted using the degeneracy factor and boltzmann factor
     f_i = g_l_matrix * jnp.exp(-energies / temp)
 
     # calculating normalization constant to divide everything by, such that
-    # all the probabilities will add up to 1
+    # all the probabilities will add up to 1 (partition function)
     Z = jnp.sum(f_i)
 
+    # obtaining average internal energy of the atom by adding up each energy 
+    # eigenvalue with their corresponding weighting
     U = jnp.sum(energies * f_i) / Z
 
     return U
+
+@partial(jit, static_argnames = ['N_points'])
+def lobpcg_solver(r_box, r_start, N_points, l):
+    """ 
+    inputs(all in atomic units):
+    r_box: endpoint for r_points, infinite potential (hard wall)
+    r_start: r_points(0) <-- not 0 because singularity
+    N_points: number of points including the boundaries
+    l: orbital quantum number 
+
+    outputs:
+    energies: column of the energies for each energy state
+    psi: matrix of (N_points-2) x (N_points-2), with the nth column representing
+    the wave function for the nth energy state
+    """
+    
+    # defining distance interval and creating array for points of analysis
+    d = (r_box - r_start) / (N_points - 1)
+    r_points = jnp.linspace(r_start, r_box, N_points)
+
+    # creating matrices for numerov
+    A_lower = jnp.ones(N_points-3)
+    A_mid = -2 * jnp.ones(N_points-2)
+    A_upper = jnp.ones(N_points-3)
+    A = (jnp.diag(A_lower, k = -1) + jnp.diag(A_mid, k = 0) + jnp.diag(A_upper, k = 1)) / d ** 2
+
+    B_lower = jnp.ones(N_points - 3)
+    B_mid = 10 * jnp.ones(N_points-2)
+    B_upper = jnp.ones(N_points-3)
+    B = (jnp.diag(B_lower, k = -1) + jnp.diag(B_mid, k = 0) + jnp.diag(B_upper, k = 1)) / 12
+
+    # potential terms, V_eff = coulomb + centrifugal for now
+    V_eff_vec = -1 / r_points + l * (l+1) / (2 * r_points ** 2)
+    V_eff = jnp.diag(V_eff_vec[1:-1], k = 0)
+
+    # constructing Hamiltonian matrix
+    H = -1/2 * A + B @ V_eff
+
+    
