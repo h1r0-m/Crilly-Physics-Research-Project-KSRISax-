@@ -17,20 +17,17 @@ def main():
 
     # initialization
     r_box = 30
-    N_points = 1000
-    l = 0
+    N_points = 300
     r_start = 1e-5
-    
-    # running solver
-    energies, psi = numerov_solver(r_box, r_start, N_points, l)
+    l_max = 10
     
     # for varying temperature
     temps = jnp.logspace(-3,1, num = 50)
     
     # calculating internal energies
     U_array = jnp.zeros(len(temps))
-    U_vect = jax.vmap(U_solver, in_axes = (None, 0))
-    U_array = U_vect(energies, temps)
+    U_vect = jax.vmap(U_solver, in_axes = (0, None, None, None, None))
+    U_array = U_vect(temps, r_box, r_start, N_points, l_max)
 
     # converting to Kelvin and eV
     temps *= 315775
@@ -48,7 +45,7 @@ def main():
     plt.xlabel("Temperature (K)", fontsize=12)
     plt.ylabel("Internal Energy (eV)", fontsize=12)
     plt.xlim((0,3e6))
-    plt.title(f"Internal Energy vs Temperature (r_box={r_box}, l={l})", fontsize=14)
+    plt.title(f"Internal Energy vs Temperature (r_box={r_box}, l_max={l_max})", fontsize=14)
     plt.grid(True)
     plt.legend()
 
@@ -62,7 +59,7 @@ def main():
         os.makedirs(plot_dir)
         print(f"Created directory: {plot_dir}")
 
-    temp_filename = os.path.join(plot_dir, f"temp_rbox{r_box}_l{l}_global.png")
+    temp_filename = os.path.join(plot_dir, f"temp_rbox{r_box}_lmax{l_max}_global.png")
     plt.savefig(temp_filename, dpi=300)
 
     # close up plot (const r_box)
@@ -73,7 +70,7 @@ def main():
     plt.ylabel("Internal Energy (eV)", fontsize=12)
     plt.xlim((0,1e5))
     plt.ylim((-15,15))
-    plt.title(f"Internal Energy vs Temperature (r_box={r_box}, l={l}) - Close Up", fontsize=14)
+    plt.title(f"Internal Energy vs Temperature (r_box={r_box}, l_max={l_max}) - Close Up", fontsize=14)
     plt.grid(True)
     plt.legend()
 
@@ -87,7 +84,7 @@ def main():
         os.makedirs(plot_dir)
         print(f"Created directory: {plot_dir}")
 
-    temp_filename = os.path.join(plot_dir, f"temp_rbox{r_box}_l{l}_closeup.png")
+    temp_filename = os.path.join(plot_dir, f"temp_rbox{r_box}_lmax{l_max}_closeup.png")
     plt.savefig(temp_filename, dpi=300)
 
     # const temp and varying r_box
@@ -97,13 +94,9 @@ def main():
     # for varying r_box
     r_box_array = jnp.logspace(-3, 2, num = 50)
 
-    # running solver
-    numerov_solver_vect = jax.vmap(numerov_solver, in_axes = (0, None, None, None))
-    energies_mat, psi_mat = numerov_solver_vect(r_box_array, r_start, N_points, l)
-
     # calculating internal energies
-    U_vect_2 = jax.vmap(U_solver, in_axes = (0, None))
-    U_array_2 = U_vect_2(energies_mat, temp)
+    U_vect_2 = jax.vmap(U_solver, in_axes = (None, 0, None, None, None))
+    U_array_2 = U_vect_2(temp, r_box_array, r_start, N_points, l_max)
     U_array_2 *= 27.2114
 
     plt.figure(figsize=(10,6))
@@ -111,11 +104,11 @@ def main():
     plt.xlabel("r_box (Ha)", fontsize=12)
     plt.xscale("log")
     plt.ylabel("Internal Energy (eV)", fontsize=12)
-    plt.title(f"Internal Energy vs r_box (temp = {temp*315775:.0f} K, l = {l})", fontsize=14)
+    plt.title(f"Internal Energy vs r_box (temp = {temp*315775:.0f} K, l_max = {l_max})", fontsize=14)
     plt.grid(True)
     plt.legend()
 
-    temp_filename = os.path.join(plot_dir, f"temp2_temp{temp}_l{l}.png")
+    temp_filename = os.path.join(plot_dir, f"temp2_temp{temp}_lmax{l_max}.png")
     plt.savefig(temp_filename, dpi=300)
 
     # file run completion message

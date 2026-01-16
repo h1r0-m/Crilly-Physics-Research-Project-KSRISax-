@@ -1,0 +1,15 @@
+# housekeeping
+import jax
+jax.config.update("jax_enable_x64", True)
+
+import jax.numpy as jnp
+import os
+import matplotlib.pyplot as plt
+from njax_functions import numerov_solver, U_solver
+
+from rich.traceback import install
+install()
+
+U = U_solver(1, 30, 1e-5, 300, 20)
+
+print(U)

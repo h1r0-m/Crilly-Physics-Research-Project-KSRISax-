@@ -55,7 +55,7 @@ def numerov_solver(r_box, r_start, N_points, l):
 def cholesky_solve(A,B):
     """ 
     basically a generalized eigenvalue/vec solver, for the form Ax = lambda B x
-    performing cholesky decomposition
+    performing cholesky decomposition, uses the eigh function
     
     background:
     B = L L^T --> Ax = lambda L L^T x --> L^-1 A x = lambda L^T x = lambda y
@@ -84,23 +84,46 @@ def cholesky_solve(A,B):
 
     return eigvals, eigvecs
 
-@jit
-def U_solver(energies, temp):
+@partial(jit, static_argnames = ['N_points', 'l_max'])
+def U_solver(temp, r_box, r_start, N_points, l_max):
     """ 
     implementing boltzmann statistics for the calculation of
     internal energy as a function of temperature and r_max
 
     inputs: 
-    energies - 1D array of the eigenvalues from numerov_solver
-    temp - scalar temperature value (in Ha, 1 Ha = 315,775 K)
-    r_max - scalar value representing confinement and density
+    temp - temperature (in Ha, 1 Ha = 315775 K)
+    r_box - box size for solving the Schrodinger equation (in Ha)
+    r_start - start point for r_points, r_points[0]
+    N_points - # of r_points used for numerov solver
+    l_max - max l we consider until, when looping through the numerov solver
+    to obtain energy eigenvalues for different l
 
     outputs: 
     U - scalar value of the internal energy (in Ha, 1 Ha = 27.2 eV)
     """
 
-    f_i = jnp.exp(-energies/temp) / sum(jnp.exp(-energies/temp))
+    l_array = jnp.arange(l_max + 1)
 
-    U = sum(energies * f_i)
+    energies = jnp.zeros((len(l_array), N_points-2))
+
+    # everything constant except for the last input for numerov_solver which is l
+    numerov_vect = jax.vmap(numerov_solver, in_axes = (None, None, None, 0))
+    energies, _ = numerov_vect(r_box, r_start, N_points, l_array)
+
+    # calculating degeneracy factors, basically how many slots open for each l
+    # 2 for spin, and 2*l+1 for magnetic quantum number so:
+    g_l = 2*(2*l_array + 1)
+
+    # resizing matrix so it can be used for matrix multiplication
+    g_l_matrix = g_l[:, None]
+
+    # calculating boltzmann factor using the degeneracy factor and boltzmann statistics
+    f_i = g_l_matrix * jnp.exp(-energies / temp)
+
+    # calculating normalization constant to divide everything by, such that
+    # all the probabilities will add up to 1
+    Z = jnp.sum(f_i)
+
+    U = jnp.sum(energies * f_i) / Z
 
     return U
