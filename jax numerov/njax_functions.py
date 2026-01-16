@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import jax.scipy.linalg as jla
 from jax import jit
 from functools import partial
+from jax.experimental import sparse
 
 # %% functions
 
@@ -130,14 +131,15 @@ def U_solver(temp, r_box, r_start, N_points, l_max):
 
     return U
 
-@partial(jit, static_argnames = ['N_points'])
-def lobpcg_solver(r_box, r_start, N_points, l):
+@partial(jit, static_argnames = ['N_points', 'k'])
+def lobpcg_solver(r_box, r_start, N_points, l, k):
     """ 
     inputs(all in atomic units):
     r_box: endpoint for r_points, infinite potential (hard wall)
     r_start: r_points(0) <-- not 0 because singularity
     N_points: number of points including the boundaries
     l: orbital quantum number 
+    k: number of eigenvalues to obtain
 
     outputs:
     energies: column of the energies for each energy state
@@ -167,4 +169,23 @@ def lobpcg_solver(r_box, r_start, N_points, l):
     # constructing Hamiltonian matrix
     H = -1/2 * A + B @ V_eff
 
+    # cholesky decomposition to make it a standard eigenvalue problem Au = lambda u
+    L = jla.cholesky(B, lower = True)
+    L_inv = jla.solve_triangular(L,jnp.eye(L.shape[0]), lower = True)
+    A_tilde = L_inv @ H @ L_inv.T
+
+    # by default, the lobpcg solver finds the largest eigenvalues, so flipping the sign
+    # of the matrix and finding its largest eigenvalues is equivalent to finding the
+    # smallest eigenvalues of the original matrix
+    A_tilde_neg = -A_tilde
+
+    # generating random matrix for original search
+    key = jax.random.PRNGKey(0)
+    X0 = jax.random.normal(key, (N_points-2, k))
+
+    # 3rd output is number of iterations performed, which is not necessary
+    energies_neg, psi, _ = jax.experimental.sparse.linalg.lobpcg_standard(A_tilde_neg, X0)
+
+    energies = -energies_neg
     
+    return energies, psi
