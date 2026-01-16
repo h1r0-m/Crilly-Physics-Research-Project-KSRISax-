@@ -19,7 +19,7 @@ def main():
     r_box = 30
     N_points = 300
     r_start = 1e-5
-    l_max = 100
+    l_max = 150
     
     # for varying temperature
     temps = jnp.logspace(-3,1, num = 50)
@@ -45,21 +45,23 @@ def main():
     plt.xlabel("Temperature (K)", fontsize=12)
     plt.ylabel("Internal Energy (eV)", fontsize=12)
     plt.xlim((0,3e6))
-    plt.title(f"Internal Energy vs Temperature (r_box={r_box}, l_max={l_max})", fontsize=14)
+    plt.title(f"Internal Energy vs Temperature (r_box={r_box}, l_max={l_max}, N_points={N_points})", fontsize=14)
     plt.grid(True)
     plt.legend()
 
     # saving
-    folder_name = "plots" 
+    main_folder = "plots"
+    sub_folder = "eigh"
+    
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    plot_dir = os.path.join(script_dir, folder_name)
-
-    # creating folder if it dosnt exist 
+    
+    plot_dir = os.path.join(script_dir, main_folder, sub_folder)
+    
     if not os.path.exists(plot_dir):
         os.makedirs(plot_dir)
         print(f"Created directory: {plot_dir}")
 
-    temp_filename = os.path.join(plot_dir, f"temp_rbox{r_box}_lmax{l_max}_global.png")
+    temp_filename = os.path.join(plot_dir, f"temp_rbox{r_box}_lmax{l_max}_N{N_points}_global.png")
     plt.savefig(temp_filename, dpi=300)
 
     # close up plot (const r_box)
@@ -70,21 +72,11 @@ def main():
     plt.ylabel("Internal Energy (eV)", fontsize=12)
     plt.xlim((0,1e5))
     plt.ylim((-15,15))
-    plt.title(f"Internal Energy vs Temperature (r_box={r_box}, l_max={l_max}) - Close Up", fontsize=14)
+    plt.title(f"Internal Energy vs Temperature (r_box={r_box}, l_max={l_max}, N_points={N_points}) - Close Up", fontsize=14)
     plt.grid(True)
     plt.legend()
 
-    # saving
-    folder_name = "plots" 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    plot_dir = os.path.join(script_dir, folder_name)
-
-    # creating folder if it dosnt exist 
-    if not os.path.exists(plot_dir):
-        os.makedirs(plot_dir)
-        print(f"Created directory: {plot_dir}")
-
-    temp_filename = os.path.join(plot_dir, f"temp_rbox{r_box}_lmax{l_max}_closeup.png")
+    temp_filename = os.path.join(plot_dir, f"temp_rbox{r_box}_lmax{l_max}_N{N_points}_closeup.png")
     plt.savefig(temp_filename, dpi=300)
 
     # const temp and varying r_box
@@ -108,7 +100,7 @@ def main():
     plt.grid(True)
     plt.legend()
 
-    temp_filename = os.path.join(plot_dir, f"temp2_temp{temp}_lmax{l_max}.png")
+    temp_filename = os.path.join(plot_dir, f"temp2_temp{temp}_lmax{l_max}_N{N_points}.png")
     plt.savefig(temp_filename, dpi=300)
 
     # file run completion message

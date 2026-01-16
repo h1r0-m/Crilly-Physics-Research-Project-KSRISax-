@@ -10,7 +10,7 @@ import os
 r_box = 30
 r_start = 1e-5
 N_points = 1000 
-l_max = 100     
+l_max = 150     
 
 # solving for energy eigenvalues for each l until l_max
 l_array = jnp.arange(l_max + 1)
