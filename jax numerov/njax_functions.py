@@ -6,18 +6,20 @@ import jax.scipy.linalg as jla
 from jax import jit
 from functools import partial
 from jax.experimental import sparse
+jax.config.update("jax_enable_x64", True)
 
 # %% functions
 
 # @jit for faster running but N_points is a static argument so using @partial
 @partial(jit, static_argnames = ['N_points'])
-def numerov_solver(r_box, r_start, N_points, l):
+def numerov_solver(r_box, r_start, N_points, l, Z = 1):
     """ 
     inputs(all in atomic units):
     r_box: endpoint for r_points, infinite potential (hard wall)
     r_start: r_points(0) <-- not 0 because singularity
     N_points: number of points including the boundaries
     l: orbital quantum number 
+    Z: atomic number, charge in the nucleus
 
     outputs:
     energies: column of the energies for each energy state
@@ -41,7 +43,7 @@ def numerov_solver(r_box, r_start, N_points, l):
     B = (jnp.diag(B_lower, k = -1) + jnp.diag(B_mid, k = 0) + jnp.diag(B_upper, k = 1)) / 12
 
     # potential terms, V_eff = coulomb + centrifugal for now
-    V_eff_vec = -1 / r_points + l * (l+1) / (2 * r_points ** 2)
+    V_eff_vec = -Z / r_points + l * (l+1) / (2 * r_points ** 2)
     V_eff = jnp.diag(V_eff_vec[1:-1], k = 0)
 
     # constructing Hamiltonian matrix
