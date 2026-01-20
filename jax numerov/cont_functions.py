@@ -152,6 +152,9 @@ def mu_solver(energies, mask, degeneracies, r_box, Z, T, iteration_count = 50):
     Z - atomic number
     T - temperature
     iteration_count - number of iterations for the bisection method, default = 50
+    
+    output:
+    mu - chemical potential
     """
 
     # initial guesses for mu, scaled if T is higher than 1 (for safety)
