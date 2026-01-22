@@ -79,7 +79,7 @@ def N_solver_cont(r_box, energies, mask, degeneracies, mu, T):
     T - temperature
 
     output:
-    N - number of electrons in the atom
+    N - total electron number in the atom
     """
 
     # getting volume
@@ -157,9 +157,9 @@ def mu_solver(energies, mask, degeneracies, r_box, Z, T, iteration_count = 50):
     mu - chemical potential
     """
 
-    # initial guesses for mu, scaled if T is higher than 1 (for safety)
-    a = -20 * jnp.maximum(1, T)
-    b = 20 * jnp.maximum(1, T)
+    # initial guesses for mu, scaled with r_box, Z, and T
+    a = -50 * jnp.maximum(1, T) * jnp.maximum(1, Z**2)
+    b = 50 * jnp.maximum(1, 1/(r_box ** 2))
     
     # performing bisection method
     for _ in range(iteration_count):
@@ -177,3 +177,12 @@ def mu_solver(energies, mask, degeneracies, r_box, Z, T, iteration_count = 50):
     c = (a + b) / 2
 
     return c
+
+# calculating entropy (not done yet)
+
+@jit
+def S_solver_cont(r_box, energies, mask, degeneracies, mu, T):
+    V = V_solver(r_box)
+
+    occup = fd_occup_solver(energies, mu, T)
+
