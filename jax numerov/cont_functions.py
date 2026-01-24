@@ -158,7 +158,7 @@ def mu_solver(energies, mask, degeneracies, r_box, Z, T, iteration_count = 50):
     """
 
     # initial guesses for mu, scaled with r_box, Z, and T
-    a = -50 * jnp.maximum(1, T**2) * jnp.maximum(1, Z**2)
+    a = -50 * jnp.maximum(1, T*jnp.log(T)) * jnp.maximum(1, Z**2)
     b = 50 * jnp.maximum(1, 1/(r_box ** 2))
     
     # performing bisection method
