@@ -29,7 +29,7 @@ def main():
     # some bound states (corrected)
     print("some bounded states (corrected):")
 
-    r_box = 2
+    r_box = 1.84
     Z = 1
     r_start = 1e-5
     N_points = 300
@@ -42,7 +42,7 @@ def main():
     print(f"U (some bound, corrected) = {U}")
 
     # some bound states (uncorrected)
-    print("some bound states (uncorrected):")
+    print("\n some bound states (uncorrected):")
 
     mu = mu_solver_uncorrected(e, m, d, r_box, Z, T_ha)
     U = U_solver_uncorrected(r_box, e, m, d, mu, T_ha)
@@ -52,9 +52,9 @@ def main():
 
     # all unbounded (corrected)
     
-    print("all free (corrected):")
+    print("\n  all free (corrected):")
 
-    r_box = 1
+    r_box = 1.83
 
     e,m,d = bounded_states_solver(r_box, r_start, N_points, Z)
     mu = mu_solver_corrected(e,m,d,r_box, r_start, N_points, Z, T_ha)   
@@ -64,7 +64,7 @@ def main():
     print(f"U (all free) = {U}")
     
     # all unbounded  states (uncorrected)
-    print("all free states (uncorrected):")
+    print("\n all free states (uncorrected):")
 
     mu = mu_solver_uncorrected(e, m, d, r_box, Z, T_ha)
     U = U_solver_uncorrected(r_box, e, m, d, mu, T_ha)
