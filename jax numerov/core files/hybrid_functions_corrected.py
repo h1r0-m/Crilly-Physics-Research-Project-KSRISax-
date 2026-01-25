@@ -4,7 +4,7 @@ from jax import jit
 from functools import partial
 from hybrid_functions_uncorrected import V_solver, fd_occup_solver
 from bessel_function import sph_bessel, sph_bessel_deriv, sph_neumann, sph_neumann_deriv
-from quad_integration import quad
+from quad_integration_fixed_nodes import fixed_GL_quad 
 from fermi_dirac_integral import fermi_dirac_integral_half, fermi_dirac_integral_three_half
 from jax.scipy.special import xlogy
 
@@ -15,7 +15,8 @@ jax.config.update("jax_enable_x64", True)
 
 @jit
 def k_solver(E,V):
-    return jnp.sqrt(2*(E-V))
+    result = jnp.where(E >= V, jnp.sqrt(2*(E-V)), 0)
+    return result
 
 @jit
 def potential_solver(r, Z):
@@ -72,7 +73,7 @@ def u_integration_solver(E, r_box, r_start, N_points, l, Z):
 
 # --- 2. Phase Shift Solver (Single Energy) ---
 
-@partial(jit, static_argnames = ['N_points'])
+@partial(jit, static_argnames = ['N_points', 'l'])
 def single_phase_shift_solver(E, r_box, r_start, N_points, l, Z):
     # 1. Get Wavefunction
     u_array = u_integration_solver(E, r_box, r_start, N_points, l, Z)
@@ -110,13 +111,13 @@ def single_phase_shift_solver(E, r_box, r_start, N_points, l, Z):
     
     # Use atan (result is wrapped between -pi/2 and pi/2)
     # atan2 is better but requires decomposing tan(delta) into sin/cos which is harder here
-    delta = jnp.arctan(numerator / denominator)
+    delta = jnp.arctan2(numerator, denominator)
     
     return delta
 
 # --- 3. The Main Pipeline (Vectorized over Energy) ---
 
-@partial(jit, static_argnames=['N_points'])
+@partial(jit, static_argnames=['N_points', 'l'])
 def d_delta_dE_solver(E, r_box, r_start, N_points, l, Z):
     """
     Input:
@@ -133,7 +134,7 @@ def d_delta_dE_solver(E, r_box, r_start, N_points, l, Z):
     
     return d_delta_dE
 
-@partial(jit, static_argnames = ['N_points'])
+@partial(jit, static_argnames = ['N_points', 'l'])
 def dos_correction_solver(E, r_box, r_start, N_points, l, Z):
     """
     Calculates the Total Density of States g(E) for a single energy E.
@@ -149,7 +150,7 @@ def dos_correction_solver(E, r_box, r_start, N_points, l, Z):
 
 # --- Integrands for the Quad Function ---
 
-@partial(jit, static_argnames = ['N_points'])
+@partial(jit, static_argnames = ['N_points', 'l'])
 def N_corr_integrand(E, r_box, r_start, N_points, mu, T, l, Z):
     """Integrand for Number of Particles: g(E) * f(E)"""
     dos_corr = dos_correction_solver(E, r_box, r_start, N_points, l, Z)
@@ -158,7 +159,7 @@ def N_corr_integrand(E, r_box, r_start, N_points, mu, T, l, Z):
 
     return dos_corr * occup
 
-@partial(jit, static_argnames = ['N_points'])
+@partial(jit, static_argnames = ['N_points', 'l'])
 def U_corr_integrand(E, r_box, r_start, N_points, mu, T, l, Z):
     """Integrand for Energy: E * g(E) * f(E)"""
     # Reuse the N integrand and multiply by E
@@ -175,7 +176,7 @@ def S_uncorr_integrand(E, r_box, mu, T):
 
     return S_uncorr_integrand
 
-@partial(jit, static_argnames = ['N_points'])
+@partial(jit, static_argnames = ['N_points', 'l'])
 def S_corr_integrand(E, r_box, r_start, N_points, mu, T, l, Z):
     """Integrand for Entropy"""
     dos_corr = dos_correction_solver(E, r_box, r_start, N_points, l, Z)
@@ -186,125 +187,153 @@ def S_corr_integrand(E, r_box, r_start, N_points, mu, T, l, Z):
     
     return S_corr_integrand
 
-@partial(jit, static_argnames = ['N_points'])
-def l_max_solver(E_end, r_box, r_start, N_points, Z, tol=1e-5):
-    """
-    Finds the angular momentum l where phase shift becomes negligible.
-    """
-    
-    def cond_fun(val):
-        l, delta = val
-        # Continue if delta is significant ( > tol)
-        # We check abs(delta) because it could be negative
-        return jnp.abs(delta) > tol
-
-    def body_fun(val):
-        l, _ = val
-        l_new = l + 1
-        
-        # Calculate phase shift at E_end for the new l
-        # Use your calculate_single_phase_shift function here
-        # Note: We only need ONE point, so this is fast.
-        delta_new = single_phase_shift_solver(E_end, r_box, r_start, N_points, l_new, Z)
-        
-        return (l_new, delta_new)
-
-    # Start at l=0 with a dummy large delta to enter the loop
-    init_val = (0, 1.0) 
-    
-    # Run loop
-    l_final, delta_final = jax.lax.while_loop(cond_fun, body_fun, init_val)
-    
-    return l_final
-
-@partial(jit, static_argnames = ['N_points'])
-def N_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, mu, T, Z):
-    # getting volume
+def N_solver_corrected(energies, mask, degeneracies,
+                       r_box, r_start, N_points,
+                       mu, T, Z,
+                       l_max: int = 50):
+    # 1. Bound electrons
     V = V_solver(r_box)
-    
-    # finding N for bounded electrons
     occup = fd_occup_solver(energies, mu, T)
     N_bound = jnp.sum(degeneracies * occup * mask)
-    
-    # calculating gamma factor
+
+    # 2. Uncorrected free
     gamma_factor = jnp.sqrt(jnp.pi) / 2
+    N_free_uncorrected = (
+        (jnp.sqrt(2) * V * T**(3/2)) / (jnp.pi**2)
+        * gamma_factor
+        * fermi_dirac_integral_half(mu/T)
+    )
 
-    # finding N for free electrons
-    N_free_uncorrected = ((jnp.sqrt(2) * V * T**(3/2)) / (jnp.pi**2)) * gamma_factor * fermi_dirac_integral_half(mu/T)
+    # 3. Correction: sum over l in Python
+    E_start = 1e-10
+    E_end_candidate = mu + 20*T
+    E_end = jnp.where(E_end_candidate > E_start, jnp.maximum(E_end_candidate, 5), 5)
 
-    E_start = 1e-5
-    E_end = mu + 20 * T
-
-    l_max = l_max_solver(E_end, r_box, r_start, N_points, Z)
-
-    def integrand_wrapper(E, r_box, r_start, mu, T, l, Z):
+    def integrand_E(E, r_box, r_start, mu, T, Z, l):
         return N_corr_integrand(E, r_box, r_start, N_points, mu, T, l, Z)
 
-    def body_fn(l, current_sum):
-        return current_sum + quad(integrand_wrapper, E_start, E_end, [r_box, r_start, mu, T, l, Z])
+    N_free_correction = 0.0
+    for l in range(l_max):
+        # l is a Python int; N_corr_integrand sees it as static
+        def func_E(E, r_box, r_start, mu, T, Z):
+            return integrand_E(E, r_box, r_start, mu, T, Z, l)
+        integral_l = fixed_GL_quad(
+            func_E,
+            E_start, E_end,
+            (r_box, r_start, mu, T, Z)
+        )
 
-    N_free_correction = jax.lax.fori_loop(0, l_max, body_fn, 0.0)
+        N_free_correction = N_free_correction + integral_l
 
     return N_bound + N_free_uncorrected + N_free_correction
 
-@partial(jit, static_argnames = ['N_points'])
-def U_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, mu, T, Z):
-    # getting volume
+def U_solver_corrected(energies, mask, degeneracies,
+                       r_box, r_start, N_points,
+                       mu, T, Z,
+                       l_max: int = 50):
+    """
+    Corrected internal energy U = U_bound + U_free_uncorrected + U_free_correction
+
+    - Sum over l is done in a Python loop.
+    - U_corr_integrand is jitted with static N_points and l.
+    """
+
+    # 1. Bound-state contribution
     V = V_solver(r_box)
-    
-    # finding N for bounded electrons
     occup = fd_occup_solver(energies, mu, T)
     U_bound = jnp.sum(degeneracies * occup * energies * mask)
-    
-    # calculating gamma factor
+
+    # 2. Uncorrected free contribution
     gamma_factor = 3 * jnp.sqrt(jnp.pi) / 4
+    U_free_uncorrected = (
+        (jnp.sqrt(2) * V * T**(5/2)) / (jnp.pi**2)
+        * gamma_factor
+        * fermi_dirac_integral_three_half(mu / T)
+    )
 
-    # finding N for free electrons
-    U_free_uncorrected = ((jnp.sqrt(2) * V * T**(5/2)) / (jnp.pi**2)) * gamma_factor * fermi_dirac_integral_three_half(mu/T)
+    # 3. Correction term: sum over partial waves and integrate over E
+    E_start = 1e-10
+    E_end_candidate = mu + 20*T
+    E_end = jnp.where(E_end_candidate > E_start, jnp.maximum(E_end_candidate, 5), 5)
 
-    E_start = 1e-5
-    E_end = mu + 20 * T
+    U_free_correction = 0.0
 
-    l_max = l_max_solver(E_end, r_box, r_start, N_points, Z)
+    for l in range(l_max):
+        # For this l, define the E-integrand using the jitted U_corr_integrand
+        def U_corr_E(E, r_box, r_start, mu, T, Z):
+            # U_corr_integrand is jitted with static_argnames=['N_points', 'l']
+            return U_corr_integrand(E, r_box, r_start, N_points, mu, T, l, Z)
+
+        # Perform the energy integral for this l
+        integral_l = fixed_GL_quad(
+            lambda E, r_box, r_start, mu, T, Z: U_corr_E(E, r_box, r_start, mu, T, Z),
+            E_start, E_end,
+            (r_box, r_start, mu, T, Z)
+        )
+
+        U_free_correction = U_free_correction + integral_l
     
-    def integrand_wrapper(E, r_box, r_start, mu, T, l, Z):
-        return U_corr_integrand(E, r_box, r_start, N_points, mu, T, l, Z)
-
-    def body_fn(l, current_sum):
-        return current_sum + quad(integrand_wrapper, E_start, E_end, [r_box, r_start, mu, T, l, Z])
-
-    U_free_correction = jax.lax.fori_loop(0, l_max, body_fn, 0.0)
+    print(f"U_bound: {U_bound}")
+    print(f"U_free_uncorrected: {U_free_uncorrected}")
+    print(f"U_free_correction: {U_free_correction}")
 
     return U_bound + U_free_uncorrected + U_free_correction
 
-@partial(jit, static_argnames = ['N_points'])
-def S_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, mu, T, Z):
-    # getting volume
+def S_solver_corrected(energies, mask, degeneracies,
+                       r_box, r_start, N_points,
+                       mu, T, Z,
+                       l_max: int = 50):
+    """
+    Corrected entropy S = S_bound + S_free_uncorrected + S_free_correction
+
+    - Sum over l is done in a Python loop.
+    - S_corr_integrand is jitted with static N_points and l.
+    """
+
+    # 1. Bound-state entropy
     V = V_solver(r_box)
-    
-    # finding N for bounded electrons
     occup = fd_occup_solver(energies, mu, T)
-    S_bound = -jnp.sum(degeneracies * mask * (xlogy(occup, occup) + xlogy(1-occup, 1-occup)))
-    
-    E_start = 1e-5
-    E_end = mu + 20 * T
-    
-    S_free_uncorrected = quad(S_uncorr_integrand, E_start, E_end, [r_box, mu, T])
+    S_bound = -jnp.sum(
+        degeneracies * mask *
+        (xlogy(occup, occup) + xlogy(1 - occup, 1 - occup))
+    )
 
-    l_max = l_max_solver(E_end, r_box, r_start, N_points, Z)
+    # 2. Uncorrected free entropy (continuum, uncorrected DOS)
+    E_start = 1e-10
+    E_end_candidate = mu + 20*T
+    E_end = jnp.where(E_end_candidate > E_start, jnp.maximum(E_end_candidate, 5), 5)
 
-    def integrand_wrapper(E, r_box, r_start, mu, T, l, Z):
-        return S_corr_integrand(E, r_box, r_start, N_points, mu, T, l, Z)
+    def S_uncorr_E(E, r_box, mu, T):
+        return S_uncorr_integrand(E, r_box, mu, T)
 
-    def body_fn(l, current_sum):
-        return current_sum + quad(integrand_wrapper, E_start, E_end, [r_box, r_start, mu, T, l, Z])
+    S_free_uncorrected = fixed_GL_quad(
+        lambda E, r_box, mu, T: S_uncorr_E(E, r_box, mu, T),
+        E_start, E_end,
+        (r_box, mu, T)
+    )
 
-    S_free_correction = jax.lax.fori_loop(0, l_max, body_fn, 0.0)
+    # 3. Correction term: sum over partial waves l
+    S_free_correction = 0.0
+
+    for l in range(l_max):
+        # For this l, define the E-integrand using the jitted S_corr_integrand
+        def S_corr_E(E, r_box, r_start, mu, T, Z):
+            # S_corr_integrand is jitted with static_argnames=['N_points', 'l']
+            return S_corr_integrand(E, r_box, r_start, N_points, mu, T, l, Z)
+
+        # Perform the energy integral for this l
+        integral_l = fixed_GL_quad(
+            lambda E, r_box, r_start, mu, T, Z: S_corr_E(E, r_box, r_start, mu, T, Z),
+            E_start, E_end,
+            (r_box, r_start, mu, T, Z)
+        )
+
+        S_free_correction = S_free_correction + integral_l
 
     return S_bound + S_free_uncorrected + S_free_correction
 
-@partial(jit, static_argnames=['N_points', 'iteration_count'])
-def mu_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, Z, T, iteration_count = 50):
+@partial(jit, static_argnames=['N_points', 'iteration_count', 'l_max'])
+def mu_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, Z, T, iteration_count = 50, l_max = 50):
     """
     finds chemical potential mu
 
@@ -328,7 +357,7 @@ def mu_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, 
     def step(i, carry): # Note: fori_loop passes 'i' first
         a, b = carry
         c = (a + b) / 2
-        N_c = N_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, c, T, Z)
+        N_c = N_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, c, T, Z, l_max)
         
         a_new = jnp.where(N_c < Z, c, a)
         b_new = jnp.where(N_c >= Z, c, b)

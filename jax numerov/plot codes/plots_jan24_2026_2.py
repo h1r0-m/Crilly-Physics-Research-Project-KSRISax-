@@ -30,7 +30,7 @@ install()
 def main():
     # U vs smaller r_box with higher N_points
 
-    r_box_array = jnp.logspace(-3, 1, num = 100)
+    r_box_array = jnp.logspace(0, 1, num = 100)
     Z = 1
     r_start = 1e-5
     N_points = 300
@@ -48,10 +48,12 @@ def main():
         mu = mu_solver_corrected(e,m,d,r, r_start, N_points, Z,T_ha)
         U = U_solver_corrected(e,m,d,r, r_start, N_points, mu, T_ha, Z)
         U_array_corrected.append(U)
+        print(f"r: {r}, U_new: {U}")
 
     plt.figure(figsize=(10,6))
     plt.plot(r_box_array, jnp.array(U_array_uncorrected) * 27.2114, linestyle="-", marker="x", color="red", label= "Uncorrected")
     plt.plot(r_box_array, jnp.array(U_array_corrected) * 27.2114, linestyle="-", marker="x", color="green", label= "Corrected")
+    plt.axvline(x = 1.82799, color = "blue", linestyle = "--", label = "E_1 = 0 at r_box = 1.83")
     plt.xlabel("Box Radius (Ha)")
     plt.xscale('log')
     plt.ylabel("Internal Energy (eV)")
