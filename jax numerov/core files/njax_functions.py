@@ -88,7 +88,7 @@ def cholesky_solve(A,B):
     return eigvals, eigvecs
 
 @partial(jit, static_argnames = ['N_points', 'l_max'])
-def U_solver(temp, r_box, r_start, N_points, l_max):
+def U_solver_nonhybrid(temp, r_box, r_start, N_points, l_max):
     """ 
     implementing boltzmann statistics for the calculation of
     internal energy as a function of temperature and r_max

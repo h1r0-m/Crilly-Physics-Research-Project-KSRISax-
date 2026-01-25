@@ -1,19 +1,28 @@
 # this was made with the help of AI
 
 # housekeeping
+
+import sys
+import os
+
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+core_path = os.path.join(parent_dir, 'core files')
+
+if core_path not in sys.path:
+    sys.path.append(core_path)
+
 import jax
 # Enable 64-bit precision (Critical for Quantum Mechanics)
 jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp
 import numpy as np
-import os
 import matplotlib.pyplot as plt
 import time
 
 # Import your modules
-from njax_functions import numerov_solver, U_solver
-from cont_functions import U_solver_cont, bounded_states_solver, mu_solver
+from njax_functions import numerov_solver, U_solver_nonhybrid
+from hybrid_functions_uncorrected import U_solver_uncorrected, bounded_states_solver, mu_solver_uncorrected
 
 from rich.traceback import install
 install()
@@ -37,12 +46,12 @@ def run_convergence_test(plot_dir, r_box, N_points, r_start, temp_ha=1.0):
     
     for l in l_max_values:
         # --- WARMUP RUN (Compiles the function for this specific l) ---
-        _ = U_solver(temp_ha, r_box, r_start, N_points, l).block_until_ready()
+        _ = U_solver_nonhybrid(temp_ha, r_box, r_start, N_points, l).block_until_ready()
         
         # --- TIMING RUN (Measures pure execution) ---
         start = time.time()
         
-        u_val = U_solver(temp_ha, r_box, r_start, N_points, l)
+        u_val = U_solver_nonhybrid(temp_ha, r_box, r_start, N_points, l)
         u_val.block_until_ready() # Force JAX to finish before stopping clock
         
         end = time.time()
@@ -60,15 +69,15 @@ def run_convergence_test(plot_dir, r_box, N_points, r_start, temp_ha=1.0):
     # --- WARMUP RUN (Compiles the Hybrid Pipeline) ---
     # We run it once with the same parameters we intend to time
     e_dummy, m_dummy, d_dummy = bounded_states_solver(r_box, r_start, N_points, 1.0, l_max=5)
-    mu_dummy = mu_solver(e_dummy, m_dummy, d_dummy, r_box, 1.0, temp_ha)
-    _ = U_solver_cont(r_box, e_dummy, m_dummy, d_dummy, mu_dummy, temp_ha).block_until_ready()
+    mu_dummy = mu_solver_uncorrected(e_dummy, m_dummy, d_dummy, r_box, 1.0, temp_ha)
+    _ = U_solver_uncorrected(r_box, e_dummy, m_dummy, d_dummy, mu_dummy, temp_ha).block_until_ready()
     
     # --- TIMING RUN ---
     start = time.time()
     
     energies, mask, deg = bounded_states_solver(r_box, r_start, N_points, 1.0, l_max=5)
-    mu = mu_solver(energies, mask, deg, r_box, 1.0, temp_ha)
-    u_new = U_solver_cont(r_box, energies, mask, deg, mu, temp_ha)
+    mu = mu_solver_uncorrected(energies, mask, deg, r_box, 1.0, temp_ha)
+    u_new = U_solver_uncorrected(r_box, energies, mask, deg, mu, temp_ha)
     u_new.block_until_ready()
     
     end = time.time()
@@ -136,14 +145,14 @@ def main():
     temps_ha = jnp.logspace(-3, 1, num=50) # 0.001 to 10 Ha
 
     # Old Method
-    U_old_vect = jax.vmap(U_solver, in_axes=(0, None, None, None, None))
+    U_old_vect = jax.vmap(U_solver_nonhybrid, in_axes=(0, None, None, None, None))
     U_old_ha = U_old_vect(temps_ha, r_box, r_start, N_points, l_max_old)
 
     # New Method
     energies, mask, degeneracies = bounded_states_solver(r_box, r_start, N_points, Z, l_max=5)
-    mu_vect = jax.vmap(mu_solver, in_axes=(None, None, None, None, None, 0))
+    mu_vect = jax.vmap(mu_solver_uncorrected, in_axes=(None, None, None, None, None, 0))
     mu_array = mu_vect(energies, mask, degeneracies, r_box, Z, temps_ha)
-    U_new_vect = jax.vmap(U_solver_cont, in_axes=(None, None, None, None, 0, 0))
+    U_new_vect = jax.vmap(U_solver_uncorrected, in_axes=(None, None, None, None, 0, 0))
     U_new_ha = U_new_vect(r_box, energies, mask, degeneracies, mu_array, temps_ha)
 
     # Plotting
@@ -185,14 +194,14 @@ def main():
     temp_ha = 1e-3
     r_box_array = jnp.logspace(-1, 2, num=30)
 
-    U_old_vect_2 = jax.vmap(U_solver, in_axes=(None, 0, None, None, None))
+    U_old_vect_2 = jax.vmap(U_solver_nonhybrid, in_axes=(None, 0, None, None, None))
     U_old_2_ha = U_old_vect_2(temp_ha, r_box_array, r_start, N_points, l_max_old)
 
     U_new_2_list = []
     for r in r_box_array:
         e, m, d = bounded_states_solver(r, r_start, N_points, Z)
-        mu_val = mu_solver(e, m, d, r, Z, temp_ha)
-        u_val = U_solver_cont(r, e, m, d, mu_val, temp_ha)
+        mu_val = mu_solver_uncorrected(e, m, d, r, Z, temp_ha)
+        u_val = U_solver_uncorrected(r, e, m, d, mu_val, temp_ha)
         U_new_2_list.append(u_val)
     U_new_2_ha = jnp.array(U_new_2_list)
 

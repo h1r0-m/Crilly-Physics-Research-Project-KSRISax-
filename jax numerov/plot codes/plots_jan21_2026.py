@@ -1,15 +1,23 @@
 # housekeeping
+import sys
+import os
+
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+core_path = os.path.join(parent_dir, 'core files')
+
+if core_path not in sys.path:
+    sys.path.append(core_path)
+    
 import jax
 jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp
 import numpy as np
-import os
 import matplotlib.pyplot as plt
 import time
 
-from njax_functions import numerov_solver, U_solver
-from cont_functions import U_solver_cont, bounded_states_solver, mu_solver
+from njax_functions import numerov_solver, U_solver_nonhybrid
+from hybrid_functions_uncorrected import U_solver_uncorrected, bounded_states_solver, mu_solver_uncorrected
 
 from rich.traceback import install
 install()
@@ -25,7 +33,7 @@ def main():
     N_points = 300
 
     e_1, m_1, d_1 = bounded_states_solver(r_box, r_start, N_points, Z)
-    mu_vect = jax.vmap(mu_solver, in_axes = (None, None, None, None, None, 0))
+    mu_vect = jax.vmap(mu_solver_uncorrected, in_axes = (None, None, None, None, None, 0))
     mu_array = mu_vect(e_1, m_1, d_1, r_box, Z, T_ha_array)
 
     plt.figure(figsize=(10,6))
@@ -65,7 +73,7 @@ def main():
     mu_array_2 = []
     for r in r_box_array:
         e, m, d = bounded_states_solver(r, r_start, N_points, Z)
-        mu = mu_solver(e, m, d, r, Z, T_ha)
+        mu = mu_solver_uncorrected(e, m, d, r, Z, T_ha)
         mu_array_2.append(mu)
 
     plt.figure(figsize=(10,6))
@@ -92,8 +100,8 @@ def main():
 
     for r in r_box_array_2:
         e, m, d = bounded_states_solver(r, r_start, N_points, Z)
-        mu = mu_solver(e, m, d, r, Z, T_ha)
-        U = U_solver_cont(r, e, m, d, mu, T_ha)
+        mu = mu_solver_uncorrected(e, m, d, r, Z, T_ha)
+        U = U_solver_uncorrected(r, e, m, d, mu, T_ha)
         U_array_1.append(U)
 
     plt.figure(figsize=(10,6))

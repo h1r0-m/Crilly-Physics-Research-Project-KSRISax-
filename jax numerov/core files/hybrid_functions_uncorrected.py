@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 from jax import jit, vmap
 from functools import partial
-from njax_functions import numerov_solver, U_solver
+from njax_functions import numerov_solver, U_solver_nonhybrid
 from fermi_dirac_integral import fermi_dirac_integral_half, fermi_dirac_integral_three_half # from Crilly's repo, for the fermi dirac integrals
 
 from rich.traceback import install
@@ -55,7 +55,7 @@ def bounded_states_solver(r_box, r_start, N_points, Z, l_max = 5):
 # required for finding mu
 
 @jit
-def N_solver_cont(r_box, energies, mask, degeneracies, mu, T):
+def N_solver_uncorrected(r_box, energies, mask, degeneracies, mu, T):
     """  
     logic:
 
@@ -102,7 +102,7 @@ def N_solver_cont(r_box, energies, mask, degeneracies, mu, T):
 
 # for finding internal energy of the atom, through separate continuum treatmenet
 @jit
-def U_solver_cont(r_box, energies, mask, degeneracies, mu, T):
+def U_solver_uncorrected(r_box, energies, mask, degeneracies, mu, T):
     """ similar to N_solver, but factors multiplied by the energy
     
     logic:
@@ -140,7 +140,7 @@ def U_solver_cont(r_box, energies, mask, degeneracies, mu, T):
 # finding mu through bisection method
 
 @partial(jit, static_argnames=['iteration_count'])
-def mu_solver(energies, mask, degeneracies, r_box, Z, T, iteration_count = 50):
+def mu_solver_uncorrected(energies, mask, degeneracies, r_box, Z, T, iteration_count = 50):
     """
     finds chemical potential mu
 
@@ -167,7 +167,7 @@ def mu_solver(energies, mask, degeneracies, r_box, Z, T, iteration_count = 50):
         c = (a + b) / 2
         
         # calculating N at mu = c
-        N_c = N_solver_cont(r_box, energies, mask, degeneracies, c, T)
+        N_c = N_solver_uncorrected(r_box, energies, mask, degeneracies, c, T)
         
         # if N_c < Z, then N = Z must be somehwere between mu = c and mu = b, so change a to c
         # if N_c > Z, opposite to change b to c
@@ -177,12 +177,3 @@ def mu_solver(energies, mask, degeneracies, r_box, Z, T, iteration_count = 50):
     c = (a + b) / 2
 
     return c
-
-# calculating entropy (not done yet)
-
-@jit
-def S_solver_cont(r_box, energies, mask, degeneracies, mu, T):
-    V = V_solver(r_box)
-
-    occup = fd_occup_solver(energies, mu, T)
-

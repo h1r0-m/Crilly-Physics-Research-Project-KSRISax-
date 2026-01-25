@@ -1,12 +1,20 @@
 # housekeeping
+import sys
+import os
+
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+core_path = os.path.join(parent_dir, 'core files')
+
+if core_path not in sys.path:
+    sys.path.append(core_path)
+    
 import jax
 jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp
 from jax import jacrev, jit
-import os
 import matplotlib.pyplot as plt
-from njax_functions import numerov_solver, U_solver
+from njax_functions import numerov_solver, U_solver_nonhybrid
 import time
 import numpy as np
 

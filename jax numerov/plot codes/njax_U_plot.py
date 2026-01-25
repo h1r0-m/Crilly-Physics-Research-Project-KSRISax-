@@ -1,11 +1,20 @@
 # housekeeping
+import sys
+import os
+
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+core_path = os.path.join(parent_dir, 'core files')
+
+if core_path not in sys.path:
+    sys.path.append(core_path)
+
 import jax
 jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp
 import os
 import matplotlib.pyplot as plt
-from njax_functions import numerov_solver, U_solver
+from njax_functions import numerov_solver, U_solver_nonhybrid
 
 from rich.traceback import install
 install()
@@ -26,7 +35,7 @@ def main():
     
     # calculating internal energies
     U_array = jnp.zeros(len(temps))
-    U_vect = jax.vmap(U_solver, in_axes = (0, None, None, None, None))
+    U_vect = jax.vmap(U_solver_nonhybrid, in_axes = (0, None, None, None, None))
     U_array = U_vect(temps, r_box, r_start, N_points, l_max)
 
     # converting to Kelvin and eV
@@ -87,7 +96,7 @@ def main():
     r_box_array = jnp.logspace(-3, 2, num = 50)
 
     # calculating internal energies
-    U_vect_2 = jax.vmap(U_solver, in_axes = (None, 0, None, None, None))
+    U_vect_2 = jax.vmap(U_solver_nonhybrid, in_axes = (None, 0, None, None, None))
     U_array_2 = U_vect_2(temp, r_box_array, r_start, N_points, l_max)
     U_array_2 *= 27.2114
 

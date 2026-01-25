@@ -1,10 +1,18 @@
+import os
+import sys
+
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+core_path = os.path.join(parent_dir, 'core files')
+
+if core_path not in sys.path:
+    sys.path.append(core_path)
+    
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
 from njax_functions import numerov_solver
-import os
 
 # initialization
 r_box = 30

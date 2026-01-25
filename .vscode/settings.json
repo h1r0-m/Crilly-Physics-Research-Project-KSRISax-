@@ -1,0 +1,8 @@
+{
+    "python.analysis.extraPaths": [
+        "C:\\Users\\megad\\OneDrive\\Documents\\Physics Research Project (Crilly)\\jax numerov\\core files"
+    ],
+    "python.autoComplete.extraPaths": [
+        "C:\\Users\\megad\\OneDrive\\Documents\\Physics Research Project (Crilly)\\jax numerov\\core files"
+    ]
+}

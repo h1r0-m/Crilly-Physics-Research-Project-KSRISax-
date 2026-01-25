@@ -1,4 +1,13 @@
 # benchkeeping + file management
+import sys
+import os
+
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+core_path = os.path.join(parent_dir, 'core files')
+
+if core_path not in sys.path:
+    sys.path.append(core_path)
+
 import jax
 
 # enabling 64-bit precision
@@ -6,7 +15,6 @@ jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-import os
 from njax_functions import numerov_solver
 
 # enables colorful tracebacks which was useful for debugging
