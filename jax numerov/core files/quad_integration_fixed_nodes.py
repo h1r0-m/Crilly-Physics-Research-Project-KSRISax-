@@ -73,7 +73,7 @@ def composite_GL_quad(func, a, b, params):
     
     return val_log + val_lin
 
-def high_density_linear_quad(func, a, b, num_points=200000):
+def high_density_linear_quad(func, a, b, num_points=100000):
     """
     Batched Trapezoidal Integration.
     Splits the massive grid into smaller chunks (batches) to prevent 
@@ -119,3 +119,22 @@ def high_density_linear_quad(func, a, b, num_points=200000):
     total_area = total_sum_y * dx - 0.5 * dx * (y_first + y_last)
     
     return total_area
+
+def composite_GL_quad_dynamic(func, segments, params):
+    """
+    Vectorized integration over dynamic segments provided by the user.
+    segments: jnp.array of shape (N+1,) defining N intervals.
+    """
+    starts = segments[:-1]
+    ends   = segments[1:]
+    
+    def integrate_segment(s, e):
+        # Only integrate if the segment has non-zero length
+        return jax.lax.cond(
+            e > s + 1e-14, 
+            lambda: simple_GL(func, s, e, params),
+            lambda: 0.0
+        )
+
+    segment_integrals = jax.vmap(integrate_segment)(starts, ends)
+    return jnp.sum(segment_integrals)
