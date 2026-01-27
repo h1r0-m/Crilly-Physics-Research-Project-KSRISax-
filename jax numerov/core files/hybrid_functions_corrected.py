@@ -1,11 +1,9 @@
+# housekeeping
 import jax
 import jax.numpy as jnp
 from jax import jit
 from functools import partial
 import scipy.optimize 
-import numpy as np
-
-# Import specific components
 from hybrid_functions_uncorrected import V_solver, fd_occup_solver
 from bessel_function import sph_bessel, sph_bessel_deriv, sph_neumann, sph_neumann_deriv
 from fermi_dirac_integral import fermi_dirac_integral_half, fermi_dirac_integral_three_half
@@ -14,58 +12,128 @@ from jax.scipy.special import xlogy
 from rich.traceback import install
 install()
 
-jax.config.update("jax_enable_x64", True) 
-
-# ==========================================
-# 1. Core Quantum Solvers (JIT Compiled)
-# ==========================================
+jax.config.update("jax_enable_x64", True)
 
 @jit
 def potential_solver(r, Z):
+    """ to get the potential, didn't integrate it in the solver so i can easily change the potential later
+     when using SCF solver
+      
+       just using simple coulomb potential: V = -Z/r for now
+        
+    inputs:
+    r - radius (in Ha)
+    Z - atomic number
+
+    output:
+    V - potential
+            """
     return -Z/r
 
 @jit
 def k_solver(E,V):
+    """ to obtain wave number, k = sqrt(2(E-V))
+     
+    derivation: 
+    E = T + V = p^2/2m + V = (hk)^2 / 2m + V --> k = sqrt((2m(E-V))/h^2), in atomic units: k = sqrt(2(E-V))
+
+    when calculating k of energy eigenvalues that were just positive, sometimes the inside of the sqrt was 
+    positive, producing NaN results so just returning 0 if thats about to happen
+
+    inputs:
+    E - energy
+    V - potential
+
+    output:
+    k - wave number
+       """
+
     result = jnp.where(E >= V, jnp.sqrt(2*(E-V)), 0)
     return result
 
 @partial(jit, static_argnames=['N_points'])
 def u_integration_solver(E, r_box, r_start, N_points, l, Z):
-    """Numerov integration for radial wavefunction u(r)."""
+    """ numerov interation for u(r) (reduced radial wave function), this is to calculate the phase shift 
+    correction term, and ultimately the logarithmic derivative at the end: R'/R to match with the bessel
+     function condition outside the box to then solve for delta (phase shift) (where R is the radial wave
+     function, not reduced) 
+     
+    so the form is:
+    d^2u / dr^2 + k^2 u = 0, where u = u(r) and k^2 = 2(E-V-l(l+1)/(2r^2))
+
+    inputs:
+    E - energy
+    r_box, r_start, N_points - default
+    l - angular quantum number
+    Z - atomic number
+
+    outputs:
+    u_array - array of values with reduced radial wave function evaluated at every point within r_points
+     """
+    
+    # radial points
     r_points = jnp.linspace(r_start, r_box, N_points)
     dr = r_points[1] - r_points[0]
     
+    # finding potential, centrifugal, and k^2 term at each radial point
     V_grid = potential_solver(r_points, Z)
     centrifugal = l * (l + 1) / (2 * r_points**2)
     k_sq_grid = 2 * (E - V_grid - centrifugal)
     
+    # defining function to loop until the end
     def numerov_step(carry, i):
-        u_prev, u_curr = carry
+        u_prev, u_curr = carry # using 2 previous values of u to calculate the next
         k_prev = k_sq_grid[i-1]
         k_curr = k_sq_grid[i]
         k_next = k_sq_grid[i+1]
         
+        # using numerov method to integrate
         term1 = (2 - 5/6 * dr**2 * k_curr) * u_curr
         term2 = (1 + 1/12 * dr**2 * k_prev) * u_prev
         denom = (1 + 1/12 * dr**2 * k_next)
         u_next = (term1 - term2) / denom
-        return (u_curr, u_next), u_next
+        return (u_curr, u_next), u_next # syntax: carry to next iteration, what to store in list
 
+    # using u(r) = C r^(l+1) for the first two radial points, appropriate for small r
     u_0 = r_points[0]**(l + 1)
     u_1 = r_points[1]**(l + 1)
     
+    # obtaining u throughout
     scan_indices = jnp.arange(1, N_points - 1)
     _, u_rest = jax.lax.scan(numerov_step, (u_0, u_1), scan_indices)
     
+    # returning full u array for all radial points
     return jnp.concatenate([jnp.array([u_0, u_1]), u_rest])
 
 @partial(jit, static_argnames = ['N_points', 'l'])
 def phase_shift_raw_solver(E, r_box, r_start, N_points, l, Z):
-    """Returns the numerator and denominator for tan(delta)."""
+    """ returning numerator and denominator for phase shift 
+    
+    inputs:
+    E - energy
+    r_box, r_start, N_points - default
+    l - angular quantum number
+    Z - atomic number   
+
+    outputs:
+    num - numerator of phase shift formula
+    den - denominator of phase shift formula
+
+    with phase shift formula being:
+    tan(delta) = (K j(x) - k j'(x)) / (K n(x) - k n'(x))
+    
+    where K = R'/R is the logarithmic derivative evaluated at r = r_box
+    j,n are spherical bessel and neumann functions respectively
+    j', n' are those functions' derivatives with respect to r
+    x = k r_box, where k is the wave number
+    """
+
+    # obtaining u
     u_array = u_integration_solver(E, r_box, r_start, N_points, l, Z)
     dr = (r_box - r_start) / (N_points - 1)
     
-    # Boundary Derivative
+    # finding derivative of wave function at boundary
+    # using 4th order backward finite difference
     u_N   = u_array[-1]
     u_Nm1 = u_array[-2]
     u_Nm2 = u_array[-3]
@@ -73,7 +141,12 @@ def phase_shift_raw_solver(E, r_box, r_start, N_points, l, Z):
     u_Nm4 = u_array[-5]
     u_prime_end = (25*u_N - 48*u_Nm1 + 36*u_Nm2 - 16*u_Nm3 + 3*u_Nm4) / (12 * dr)
     
-    K = u_prime_end / (u_N + 1e-15) - 1.0 / r_box
+    # finding K, but K uses radial wave function while u that we have is the reduced version
+    # R = u/r --> K = R'/R = u'/u - 1/r (from quotient rule and chain rule)
+    # adding infinitesimal term to denominator to avoid division by 0
+    K = u_prime_end / (u_N + 1e-15) - 1.0 / r_box 
+
+    # evaluating formula
     V_edge = potential_solver(r_box, Z)
     k_end = k_solver(E, V_edge)
     x = k_end * r_box
@@ -90,40 +163,56 @@ def phase_shift_raw_solver(E, r_box, r_start, N_points, l, Z):
 
 @partial(jit, static_argnames = ['N_points', 'l'])
 def phase_shift_denominator(E, r_box, r_start, N_points, l, Z):
-    """Helper for root finding (resonance search)."""
+    """just a function for the denominator of the phase shift
+    useful for the root-finding required in the next function correction_grid_solver
+    
+    inputs:
+    E, r_box, r_start, N_points, l, Z - standard
+
+    outputs:
+    den - denominator from tan(delta) = - formula, phase shift formula
+    """
     _, den = phase_shift_raw_solver(E, r_box, r_start, N_points, l, Z)
     return den
 
-# ==========================================
-# 2. Robust Grid Generation (Python)
-# ==========================================
+def correction_grid_solver(r_box, r_start, N_points, mu, T, l, Z, E_max):
+    """
+    function to create relevant grid for numerical integration. adds extra points where delta is expected to
+    go through a phase shift and when f (occupancy) is expected to change as well
 
-def get_smart_grid(r_box, r_start, N_points, mu, T, l, Z, E_max=5.0):
+    inputs:
+    r_box, r_start, N_points, mu, T, l, Z - standard
+    E_max - max E we are integrating until for the correction term, doenst have to be inf because for example
+    the integrand for N and U would be multiplied by the fermi-dirac occupation which decays as E increases
+
+    outputs:
+    grid_points - grid specialized for integration of this problem
+
     """
-    Generates a grid that captures resonances. 
-    Uses a 'Log-Broad' strategy to ensure we bracket the resonance 
-    even if we don't land exactly on the peak.
-    """
-    # Base grid
+    # default grid, logarithmic spacing
     grid_points = [1e-16, 1e-12, 1e-8, 1e-4, 1e-2, 0.1, 0.5, 1.0, 2.0, E_max]
     
+    # if mu is in relevant range of integration, adding grid points near it
+    # f expected to change at around E = mu, and width of that change is also proportional to T
     if 0 < mu < E_max:
         grid_points.extend([mu - 4*T, mu - T, mu, mu + T, mu + 4*T])
 
-    # Resonance Search
+    # search for when resonance occurs, or phase shift occurs
+    # this happens when the denominator of the tan(delta) equation hits 0 because then tan(delta) --> inf
+    # doing a coarse grid search first to find the region in which the root exists (and therefore sign changes)
     test_energies = jnp.logspace(jnp.log10(1e-16), jnp.log10(E_max), 200)
     denoms = jax.vmap(lambda E: phase_shift_denominator(E, r_box, r_start, N_points, l, Z))(test_energies)
-    sign_changes = jnp.where(jnp.diff(jnp.sign(denoms)))[0]
+    sign_changes = jnp.where(jnp.diff(jnp.sign(denoms)))[0] # returns array of indices where sign changes occur
     
+    # and then after that, use scipy brentq (root solver) to find exact E of resonance
     for idx in sign_changes:
         e_low = test_energies[idx]
         e_high = test_energies[idx+1]
-        try:
+        try: # using try in case brentq fails for very small energy values
             func_to_root = lambda e_val: float(phase_shift_denominator(e_val, r_box, r_start, N_points, l, Z))
-            E_res = scipy.optimize.brentq(func_to_root, float(e_low), float(e_high))
+            E_res = scipy.optimize.brentq(func_to_root, float(e_low), float(e_high)) # performing root finding
             
-            # Log-Broad Cluster: Place points at geometric factors around E_res
-            # This ensures we catch the phase jump whether it's sharp or broad
+            # places points around E_res to ensure we catch the phase shift
             factors = [0.1, 0.5, 0.9, 0.99, 0.999]
             cluster = [E_res]
             for f in factors:
@@ -134,109 +223,133 @@ def get_smart_grid(r_box, r_start, N_points, mu, T, l, Z, E_max=5.0):
         except:
             pass
 
-    # Sort and Filter
+    # sorting and filtering final grid 
     grid_points = jnp.array(grid_points)
     grid_points = jnp.sort(grid_points)
     grid_points = grid_points[grid_points >= 1e-16]
     grid_points = grid_points[grid_points <= E_max]
     
+    # filtering out duplicates, since that can happen if E_res coincides with the Fermi edge for example
     unique_mask = jnp.concatenate([jnp.array([True]), jnp.diff(grid_points) > 1e-14 * grid_points[1:]])
     return grid_points[unique_mask]
 
-# ==========================================
-# 3. New "Difference" Integrator
-# ==========================================
-
 @partial(jit, static_argnames=['N_points', 'l'])
-def compute_correction_on_grid(grid, r_box, r_start, N_points, mu, T, l, Z):
+def correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z):
     """
-    Computes N_corr and U_corr using the phase-difference method.
-    Robust against vertical phase jumps (resonances).
+    computes correction term for N and U using change in delta directly
+
+    inputs:
+    grid - grid of points used for integration obtained from correction_grid_solver function above
+    r_box, r_start, N_points, mu, T, l, Z - standard
+
+    outputs:
+    N_corr - correction term for N
+    U_corr - correction term for U
+
     """
-    
-    # 1. Calculate Raw Phase Components (Vectorized)
+    # obtaining numerator and denominator of phase shift equation for all points on the energy grid
     nums, dens = jax.vmap(lambda E: phase_shift_raw_solver(E, r_box, r_start, N_points, l, Z))(grid)
     
-    # 2. Compute Angle and Unwrap
-    # arctan2 handles quadrants correctly. unwrap handles 2pi jumps.
+    # computing delta, and unwrapping so that we get a smooth and continuous curve for the phase shift
+    # basically if difference is larger than pi, then it adds or subtracts 2pi to make it continous 
     phases = jnp.arctan2(nums, dens)
     phases_unwrapped = jnp.unwrap(phases)
     
-    # 3. Calculate Differences (Delta delta)
-    # This captures the step height exactly, even if slope is infinite
+    # calculating difference between phase shift of each point on energy grid
     d_phases = jnp.diff(phases_unwrapped)
     
-    # 4. DOS factor: (2/pi) * (2l+1) * d_delta
-    # We remove dE from the integral because we use d_delta directly
-    # Integral ~ sum( f * (d_delta/dE) * dE ) = sum( f * d_delta )
+    # for the dos factor: correction term = sum((2/pi) * (2l+1) * d_delta)
     factor = (2.0 / jnp.pi) * (2*l + 1)
     
-    # 5. Integrate N (Trapezoidal on f)
-    # Avg occupancy between steps
-    occup = fd_occup_solver(grid, mu, T)
-    occup_avg = 0.5 * (occup[1:] + occup[:-1])
+    # integrating for N, N_corr = factor * sum(occup_avg * phase shift in that interval)
+    N_integrand = fd_occup_solver(grid, mu, T)
+    N_integrand_avg = 0.5 * (N_integrand[1:] + N_integrand[:-1])
+    N_corr = factor * jnp.sum(N_integrand_avg * d_phases)
     
-    N_corr = factor * jnp.sum(occup_avg * d_phases)
+    # integrating for U, U_corr = factor * sum(average(occup * energy) * phase shift)
+    U_integrand = grid * N_integrand
+    U_integrand_avg = 0.5 * (U_integrand[1:] + U_integrand[:-1])
     
-    # 6. Integrate U (Trapezoidal on E*f)
-    energy_occup = grid * occup
-    energy_occup_avg = 0.5 * (energy_occup[1:] + energy_occup[:-1])
-    
-    U_corr = factor * jnp.sum(energy_occup_avg * d_phases)
+    U_corr = factor * jnp.sum(U_integrand_avg * d_phases)
     
     return N_corr, U_corr
 
-# ==========================================
-# 4. Main Solvers (Refactored)
-# ==========================================
+def thermo_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, mu, T, Z, l_max=50):
+    """ 
+    main solver for thermodynamic quantities: N, U, S (entropy)
 
-def N_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, mu, T, Z, l_max=50):
-    # 1. Bound
+    combined all in one because most of the calculation needed for U is the same as N, so waste of computational
+    resources to calculate N and U separately if u want both quantities
+
+    inputs:
+    energies - grid of energy eigenvalues obtained from numerov solver
+    mask - same dim as energies, 1 if bounded, 0 if free
+    degeneracies - same dim as energies, 2*(2l+1) value corresponding to each entry in the grid
+    r_box, r_start, N_points, mu, T, Z - standard
+    l_max - max l to interate until for correction term
+
+    outputs:
+    N_total - total electron number, N_bound + N_free_uncorrected + N_free_correction
+    U_total - total internal energy, U_bound + U_free_uncorrected + U_free_correction
+    S_total - total entropy, S_bound + S_free_uncorrected + S_free_correction
+        """
+
+    # calculating bound state contributions of the physical quantities
     occup = fd_occup_solver(energies, mu, T)
     N_bound = jnp.sum(degeneracies * occup * mask)
-    
-    # 2. Free Uncorrected
-    V = V_solver(r_box)
-    gamma_factor = jnp.sqrt(jnp.pi) / 2
-    N_free_unc = ((jnp.sqrt(2)*V*T**(3/2))/(jnp.pi**2)) * gamma_factor * fermi_dirac_integral_half(mu/T)
-    
-    # 3. Correction (Sum over l)
-    N_corr_total = 0.0
-    for l in range(l_max):
-        grid = get_smart_grid(r_box, r_start, N_points, mu, T, l, Z)
-        n_c, _ = compute_correction_on_grid(grid, r_box, r_start, N_points, mu, T, l, Z)
-        N_corr_total += n_c
-        
-    return N_bound + N_free_unc + N_corr_total
-
-def U_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, mu, T, Z, l_max=50):
-    # 1. Bound
-    occup = fd_occup_solver(energies, mu, T)
     U_bound = jnp.sum(degeneracies * occup * energies * mask)
     
-    # 2. Free Uncorrected
+    # calculating free uncorrected contributions
     V = V_solver(r_box)
-    gamma_factor = 3 * jnp.sqrt(jnp.pi) / 4
-    U_free_unc = ((jnp.sqrt(2)*V*T**(5/2))/(jnp.pi**2)) * gamma_factor * fermi_dirac_integral_three_half(mu/T)
+    gamma_factor_N = jnp.sqrt(jnp.pi) / 2
+    N_free_unc = ((jnp.sqrt(2)*V*T**(3/2))/(jnp.pi**2)) * gamma_factor_N * fermi_dirac_integral_half(mu/T)
     
-    # 3. Correction
+    gamma_factor_U = 3 * jnp.sqrt(jnp.pi) / 4
+    U_free_unc = ((jnp.sqrt(2)*V*T**(5/2))/(jnp.pi**2)) * gamma_factor_U * fermi_dirac_integral_three_half(mu/T)
+    
+    # calculating correction term
+    N_corr_total = 0.0
     U_corr_total = 0.0
+    
+    # setting max E to integrate until, at this E the occupancy is basically 0 so the integrand is also 0
+    E_max = jnp.maximum(20 + mu * T, 5)
+
+    # adding contributions over each l
     for l in range(l_max):
-        grid = get_smart_grid(r_box, r_start, N_points, mu, T, l, Z)
-        _, u_c = compute_correction_on_grid(grid, r_box, r_start, N_points, mu, T, l, Z)
+        # generating relevant grid for integration
+        grid = correction_grid_solver(r_box, r_start, N_points, mu, T, l, Z, E_max)
+        
+        # obtaining correction term for that l
+        n_c, u_c = correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z)
+        
+        # adding to total of correction
+        N_corr_total += n_c
         U_corr_total += u_c
         
-    return U_bound + U_free_unc + U_corr_total
+    # summing all contributions to get final physical quantity
+    N_total = N_bound + N_free_unc + N_corr_total
+    U_total = U_bound + U_free_unc + U_corr_total
+    
+    return N_total, U_total
 
-# Keeping mu_solver effectively the same, just removing decorators 
-# so it can handle the Python loop inside N_solver
 def mu_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, Z, T, iteration_count=50, l_max=50):
+    """ 
+    to find chemical potential (mu) using bisection method
+
+    inputs:
+    e,m,d,r_box, r_start, N_points, Z, T - standard
+    iteration_count - how many iterations for bisection method, default = 50
+    l_max - max l to iterate until for correction term, default = 50
+        """
+    
+    # initial boundaries
     a = -50 * jnp.maximum(1, T * jnp.log(T)) * jnp.maximum(1, Z**2)
     b = 50 * jnp.maximum(1, 1 / (r_box ** 2))
     
+    # implementing bisection method (same logic as uncorrected version)
     for _ in range(iteration_count):
         c = (a + b) / 2.0
-        N_c = N_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, c, T, Z, l_max)
+        N_c, _ = thermo_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, c, T, Z, l_max)
         
         if N_c < Z:
             a = c

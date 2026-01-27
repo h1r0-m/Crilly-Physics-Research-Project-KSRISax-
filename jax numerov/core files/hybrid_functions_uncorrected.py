@@ -135,9 +135,6 @@ def U_solver_uncorrected(r_box, energies, mask, degeneracies, mu, T):
     # total internal energy
     U = U_bound + U_free
 
-    jax.debug.print("U_bound: {x}", x=U_bound)
-    jax.debug.print("U_free: {x}", x = U_free)
-
     return U
 
 # finding mu through bisection method
