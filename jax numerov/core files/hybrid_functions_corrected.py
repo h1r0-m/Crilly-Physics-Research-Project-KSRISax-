@@ -492,6 +492,24 @@ def S_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, m
     
     return S_total
 
+def F_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, mu, T, Z, l_max = 50):
+    """ 
+    solver for Helmholtz free energy
+
+    formula:
+    F = U - TS
+
+    inputs:
+    same as above
+
+    output:
+    F - helmholtz free energy
+        """
+        
+    _, U, S = thermo_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, mu, T, Z, l_max)
+    F = U - T * S
+    return F
+
 def mu_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, Z, T, iteration_count=50, l_max=50):
     """ 
     to find chemical potential (mu) using bisection method
