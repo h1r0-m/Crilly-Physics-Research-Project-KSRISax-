@@ -332,6 +332,88 @@ def thermo_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_poin
     
     return N_total, U_total
 
+def N_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, mu, T, Z, l_max = 50):
+    """ individual solver for N. if only solving for N then use this, if solving for other thermodynamic 
+     quantities simulatenously, then use above thermo_solver_corrected
+      
+    inputs - same as above
+
+    outputs:
+    N_total - total electron number      
+         """
+    
+    # calculating bound state contributions of the physical quantities
+    occup = fd_occup_solver(energies, mu, T)
+    N_bound = jnp.sum(degeneracies * occup * mask)
+    
+    # calculating free uncorrected contributions
+    V = V_solver(r_box)
+    gamma_factor_N = jnp.sqrt(jnp.pi) / 2
+    N_free_unc = ((jnp.sqrt(2)*V*T**(3/2))/(jnp.pi**2)) * gamma_factor_N * fermi_dirac_integral_half(mu/T)
+    
+    
+    # calculating correction term
+    N_corr_total = 0.0
+    
+    # setting max E to integrate until, at this E the occupancy is basically 0 so the integrand is also 0
+    E_max = jnp.maximum(20 + mu * T, 5)
+
+    # adding contributions over each l
+    for l in range(l_max):
+        # generating relevant grid for integration
+        grid = correction_grid_solver(r_box, r_start, N_points, mu, T, l, Z, E_max)
+        
+        # obtaining correction term for that l
+        n_c, _ = correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z)
+        
+        # adding to total of correction
+        N_corr_total += n_c
+        
+    # summing all contributions to get final physical quantity
+    N_total = N_bound + N_free_unc + N_corr_total
+    
+    return N_total
+
+def U_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, mu, T, Z, l_max = 50):
+    """ individual solver for U. if only solving for U then use this, if solving for other thermodynamic 
+     quantities simulatenously, then use above thermo_solver_corrected
+      
+    inputs - same as above
+
+    outputs:
+    U_total - total internal energy
+         """
+    # calculating bound state contributions of the physical quantities
+    occup = fd_occup_solver(energies, mu, T)
+    U_bound = jnp.sum(degeneracies * occup * energies * mask)
+    
+    # calculating free uncorrected contributions
+    V = V_solver(r_box)
+    gamma_factor_U = 3 * jnp.sqrt(jnp.pi) / 4
+    U_free_unc = ((jnp.sqrt(2)*V*T**(5/2))/(jnp.pi**2)) * gamma_factor_U * fermi_dirac_integral_three_half(mu/T)
+    
+    # calculating correction term
+    U_corr_total = 0.0
+    
+    # setting max E to integrate until, at this E the occupancy is basically 0 so the integrand is also 0
+    E_max = jnp.maximum(20 + mu * T, 5)
+
+    # adding contributions over each l
+    for l in range(l_max):
+        # generating relevant grid for integration
+        grid = correction_grid_solver(r_box, r_start, N_points, mu, T, l, Z, E_max)
+        
+        # obtaining correction term for that l
+        _, u_c = correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z)
+        
+        # adding to total of correction
+        U_corr_total += u_c
+        
+    # summing all contributions to get final physical quantity
+    U_total = U_bound + U_free_unc + U_corr_total
+    
+    return U_total
+
 def mu_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, Z, T, iteration_count=50, l_max=50):
     """ 
     to find chemical potential (mu) using bisection method
