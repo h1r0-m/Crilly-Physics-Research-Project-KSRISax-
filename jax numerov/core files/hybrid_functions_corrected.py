@@ -559,6 +559,9 @@ def mu_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, 
     e,m,d,r_box, r_start, N_points, Z, T - standard
     iteration_count - how many iterations for bisection method, default = 50
     l_max - max l to iterate until for correction term, default = 50
+
+    output:
+    mu - chemical potential
         """
     
     # initial boundaries
