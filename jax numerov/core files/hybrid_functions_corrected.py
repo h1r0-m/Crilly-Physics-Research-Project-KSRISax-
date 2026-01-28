@@ -236,7 +236,9 @@ def correction_grid_solver(r_box, r_start, N_points, mu, T, l, Z, E_max):
 @partial(jit, static_argnames=['N_points', 'l'])
 def correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z):
     """
-    computes correction term for N and U using change in delta directly
+    computes correction term for N and U using change in delta directly 
+    this is for each l, and then sum over l later until l_max in thermo_solver_corrected to get
+    full correction term
 
     inputs:
     grid - grid of points used for integration obtained from correction_grid_solver function above
@@ -269,10 +271,36 @@ def correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z):
     # integrating for U, U_corr = factor * sum(average(occup * energy) * phase shift)
     U_integrand = grid * N_integrand
     U_integrand_avg = 0.5 * (U_integrand[1:] + U_integrand[:-1])
-    
     U_corr = factor * jnp.sum(U_integrand_avg * d_phases)
+
+    # integrating for S, S_corr = factor * sum(average(occup * log(occup) + (1-occup) * log(1-occup)) * phase shift)
+    S_corr_integrand = xlogy(N_integrand, N_integrand) + xlogy(1-N_integrand, 1-N_integrand)
+    S_corr_integrand_avg = 0.5 * (S_corr_integrand[1:] + S_corr_integrand[:-1])
+    S_corr = -factor * jnp.sum(S_corr_integrand_avg * d_phases)
     
-    return N_corr, U_corr
+    return N_corr, U_corr, S_corr
+
+@jit
+def S_free_uncorrected_solver(N_free_unc, U_free_unc, mu, T):
+    """ 
+    for the free uncorrected entropy term, using the formula:
+    S_free_unc = 1/T (5/3 U_free_unc - mu N_free_unc)
+
+    inputs:
+    N_free_unc - free uncorrected total electron number term
+    U_free_unc - free uncorrected internal energy term
+    mu - chemical potential
+    T - temperature
+
+    output:
+    S_free_unc - free uncorrected term for entropy
+       """
+    # to avoid division by 0
+    T_safe = jnp.maximum(T, 1e-12)   
+
+    S_free_unc = 1/T_safe * ((5/3) * U_free_unc - mu * N_free_unc)
+
+    return S_free_unc
 
 def thermo_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, mu, T, Z, l_max=50):
     """ 
@@ -298,6 +326,7 @@ def thermo_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_poin
     occup = fd_occup_solver(energies, mu, T)
     N_bound = jnp.sum(degeneracies * occup * mask)
     U_bound = jnp.sum(degeneracies * occup * energies * mask)
+    S_bound = jnp.sum(-degeneracies * mask * (xlogy(occup, occup) + xlogy(1-occup, 1-occup)))
     
     # calculating free uncorrected contributions
     V = V_solver(r_box)
@@ -306,13 +335,16 @@ def thermo_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_poin
     
     gamma_factor_U = 3 * jnp.sqrt(jnp.pi) / 4
     U_free_unc = ((jnp.sqrt(2)*V*T**(5/2))/(jnp.pi**2)) * gamma_factor_U * fermi_dirac_integral_three_half(mu/T)
-    
+
+    S_free_unc = S_free_uncorrected_solver(N_free_unc, U_free_unc, mu, T)
+
     # calculating correction term
     N_corr_total = 0.0
     U_corr_total = 0.0
+    S_corr_total = 0.0
     
     # setting max E to integrate until, at this E the occupancy is basically 0 so the integrand is also 0
-    E_max = jnp.maximum(20 + mu * T, 5)
+    E_max = jnp.maximum(mu + 20 * T, 5)
 
     # adding contributions over each l
     for l in range(l_max):
@@ -320,17 +352,19 @@ def thermo_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_poin
         grid = correction_grid_solver(r_box, r_start, N_points, mu, T, l, Z, E_max)
         
         # obtaining correction term for that l
-        n_c, u_c = correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z)
+        N_corr, U_corr, S_corr = correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z)
         
         # adding to total of correction
-        N_corr_total += n_c
-        U_corr_total += u_c
+        N_corr_total += N_corr
+        U_corr_total += U_corr
+        S_corr_total += S_corr
         
     # summing all contributions to get final physical quantity
     N_total = N_bound + N_free_unc + N_corr_total
     U_total = U_bound + U_free_unc + U_corr_total
+    S_total = S_bound + S_free_unc + S_corr_total
     
-    return N_total, U_total
+    return N_total, U_total, S_total
 
 def N_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, mu, T, Z, l_max = 50):
     """ individual solver for N. if only solving for N then use this, if solving for other thermodynamic 
@@ -351,12 +385,11 @@ def N_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, m
     gamma_factor_N = jnp.sqrt(jnp.pi) / 2
     N_free_unc = ((jnp.sqrt(2)*V*T**(3/2))/(jnp.pi**2)) * gamma_factor_N * fermi_dirac_integral_half(mu/T)
     
-    
     # calculating correction term
     N_corr_total = 0.0
     
     # setting max E to integrate until, at this E the occupancy is basically 0 so the integrand is also 0
-    E_max = jnp.maximum(20 + mu * T, 5)
+    E_max = jnp.maximum(mu + 20 * T, 5)
 
     # adding contributions over each l
     for l in range(l_max):
@@ -364,14 +397,14 @@ def N_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, m
         grid = correction_grid_solver(r_box, r_start, N_points, mu, T, l, Z, E_max)
         
         # obtaining correction term for that l
-        n_c, _ = correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z)
+        N_corr, _, _ = correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z)
         
         # adding to total of correction
-        N_corr_total += n_c
+        N_corr_total += N_corr
         
     # summing all contributions to get final physical quantity
     N_total = N_bound + N_free_unc + N_corr_total
-    
+
     return N_total
 
 def U_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, mu, T, Z, l_max = 50):
@@ -396,7 +429,7 @@ def U_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, m
     U_corr_total = 0.0
     
     # setting max E to integrate until, at this E the occupancy is basically 0 so the integrand is also 0
-    E_max = jnp.maximum(20 + mu * T, 5)
+    E_max = jnp.maximum(mu + 20 * T, 5)
 
     # adding contributions over each l
     for l in range(l_max):
@@ -404,15 +437,60 @@ def U_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, m
         grid = correction_grid_solver(r_box, r_start, N_points, mu, T, l, Z, E_max)
         
         # obtaining correction term for that l
-        _, u_c = correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z)
+        _, U_corr, _ = correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z)
         
         # adding to total of correction
-        U_corr_total += u_c
+        U_corr_total += U_corr
         
     # summing all contributions to get final physical quantity
     U_total = U_bound + U_free_unc + U_corr_total
     
     return U_total
+
+def S_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, mu, T, Z, l_max = 50):
+    """ individual solver for S. if only solving for S then use this, if solving for other thermodynamic 
+     quantities simulatenously, then use above thermo_solver_corrected
+      
+    inputs - same as above
+
+    outputs:
+    S_total - total entropy
+         """
+    # calculating bound state contributions of the physical quantities
+    occup = fd_occup_solver(energies, mu, T)
+    S_bound = jnp.sum(-degeneracies * mask * (xlogy(occup, occup) + xlogy(1-occup, 1-occup)))
+    
+    # calculating free uncorrected contributions
+    V = V_solver(r_box)
+    gamma_factor_N = jnp.sqrt(jnp.pi) / 2
+    N_free_unc = ((jnp.sqrt(2)*V*T**(3/2))/(jnp.pi**2)) * gamma_factor_N * fermi_dirac_integral_half(mu/T)
+    
+    gamma_factor_U = 3 * jnp.sqrt(jnp.pi) / 4
+    U_free_unc = ((jnp.sqrt(2)*V*T**(5/2))/(jnp.pi**2)) * gamma_factor_U * fermi_dirac_integral_three_half(mu/T)
+
+    S_free_unc = S_free_uncorrected_solver(N_free_unc, U_free_unc, mu, T)
+
+    # calculating correction term
+    S_corr_total = 0.0
+    
+    # setting max E to integrate until, at this E the occupancy is basically 0 so the integrand is also 0
+    E_max = jnp.maximum(mu + 20 * T, 5)
+
+    # adding contributions over each l
+    for l in range(l_max):
+        # generating relevant grid for integration
+        grid = correction_grid_solver(r_box, r_start, N_points, mu, T, l, Z, E_max)
+        
+        # obtaining correction term for that l
+        _, _, S_corr = correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z)
+        
+        # adding to total of correction
+        S_corr_total += S_corr
+        
+    # summing all contributions to get final physical quantity
+    S_total = S_bound + S_free_unc + S_corr_total
+    
+    return S_total
 
 def mu_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, Z, T, iteration_count=50, l_max=50):
     """ 
@@ -431,7 +509,7 @@ def mu_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, 
     # implementing bisection method (same logic as uncorrected version)
     for _ in range(iteration_count):
         c = (a + b) / 2.0
-        N_c, _ = thermo_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, c, T, Z, l_max)
+        N_c, _, _ = thermo_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, c, T, Z, l_max)
         
         if N_c < Z:
             a = c
