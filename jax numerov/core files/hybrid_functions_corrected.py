@@ -1,11 +1,12 @@
 # housekeeping
 import jax
 import jax.numpy as jnp
+from jax.nn import sigmoid
 from jax import jit
 from functools import partial
 import scipy.optimize 
-from hybrid_functions_uncorrected import V_solver, fd_occup_solver
 from bessel_function import sph_bessel, sph_bessel_deriv, sph_neumann, sph_neumann_deriv
+from njax_functions import numerov_solver
 from fermi_dirac_integral import fermi_dirac_integral_half, fermi_dirac_integral_three_half
 from jax.scipy.special import xlogy
 
@@ -13,6 +14,46 @@ from rich.traceback import install
 install()
 
 jax.config.update("jax_enable_x64", True)
+
+@jit
+def V_solver(r_box):
+    return (4/3) * jnp.pi * r_box ** 3
+
+@jit
+def fd_occup_solver(E, mu, T):
+    # using sigmoid for numerical stability
+    return sigmoid((mu - E) / T)
+
+@partial(jit, static_argnames=['N_points', 'l_max'])
+def bounded_states_solver(r_box, r_start, N_points, Z, l_max = 5):
+    """
+    pasted straight from the uncorrected code file
+
+    inputs: 
+    r_box, r_start, N_points - standard
+    Z - atomic number
+    l_max - what l to do numerov_solver until, assuming l = 0 to 5 covers all the bound states, but could be changed
+
+    outputs:
+    energies - a matrix of energy eigenvalues with each col corresponding to a certain l
+    mask - a matrix same dimension as energies with either 1 or 0 depending on whether entry is bounded (E < 0) or not
+            entry is 1 if bounded, otherwise 0
+    degeneracies - same dimension as energies, with degeneracy factor for each entry
+    """
+    
+    # using numerov solver for l = 0 to l_max
+    l_array = jnp.arange(l_max + 1)
+    numerov_vect = jax.vmap(numerov_solver, in_axes=(None, None, None, 0, None))
+    energies, _ = numerov_vect(r_box, r_start, N_points, l_array, Z)
+    
+    # creating mask for bound states
+    mask = jnp.where(energies < 0, 1, 0)
+    
+    # creating degeneracy matrix
+    l_grid = jnp.repeat(l_array[:, None], energies.shape[1], axis=1) # same dimensions as energies, filled with corresponding l values
+    degeneracies = 2 * (2 * l_grid + 1) # degeneracy matrix for each energy entry
+    
+    return energies, mask, degeneracies
 
 @jit
 def potential_solver(r, Z):
