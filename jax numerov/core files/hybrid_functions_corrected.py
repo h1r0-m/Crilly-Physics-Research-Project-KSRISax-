@@ -583,7 +583,7 @@ def mu_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, 
     # implementing bisection method (same logic as uncorrected version)
     for _ in range(iteration_count):
         c = (a + b) / 2.0
-        N_c, _, _ = thermo_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, c, T, Z, l_max)
+        N_c = N_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, c, T, Z, l_max)
         
         if N_c < Z:
             a = c
