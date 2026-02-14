@@ -88,7 +88,7 @@ def cholesky_solve(A,B):
     return eigvals, eigvecs
 
 @partial(jit, static_argnames = ['N_points', 'l_max'])
-def U_solver_nonhybrid(temp, r_box, r_start, N_points, l_max):
+def U_solver_nonhybrid(temp, r_box, r_start, N_points, Z, l_max):
     """ 
     implementing boltzmann statistics for the calculation of
     internal energy as a function of temperature and r_max
@@ -98,6 +98,7 @@ def U_solver_nonhybrid(temp, r_box, r_start, N_points, l_max):
     r_box - box size for solving the Schrodinger equation (in Ha)
     r_start - start point for r_points, r_points[0]
     N_points - # of r_points used for numerov solver
+    Z - atomic number
     l_max - max l we consider until, when looping through the numerov solver
     to obtain energy eigenvalues for different l
 
@@ -110,8 +111,8 @@ def U_solver_nonhybrid(temp, r_box, r_start, N_points, l_max):
     energies = jnp.zeros((len(l_array), N_points-2))
 
     # everything constant except for the last input for numerov_solver which is l
-    numerov_vect = jax.vmap(numerov_solver, in_axes = (None, None, None, 0))
-    energies, _ = numerov_vect(r_box, r_start, N_points, l_array)
+    numerov_vect = jax.vmap(numerov_solver, in_axes = (None, None, None, 0, None))
+    energies, _ = numerov_vect(r_box, r_start, N_points, l_array, Z)
 
     # calculating degeneracy factors, basically how many slots open for each l
     # 2 for spin, and 2*l+1 for magnetic quantum number so:

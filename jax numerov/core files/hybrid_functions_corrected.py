@@ -157,8 +157,8 @@ def phase_shift_raw_solver(E, r_box, r_start, N_points, l, Z):
     Z - atomic number   
 
     outputs:
-    num - numerator of phase shift formula
-    den - denominator of phase shift formula
+    num_robust - numerator of phase shift formula * u_N (u_N being reduced radial wave function at end)
+    den_robust - denominator of phase shift formula * u_N
 
     with phase shift formula being:
     tan(delta) = (K j(x) - k j'(x)) / (K n(x) - k n'(x))
@@ -167,6 +167,9 @@ def phase_shift_raw_solver(E, r_box, r_start, N_points, l, Z):
     j,n are spherical bessel and neumann functions respectively
     j', n' are those functions' derivatives with respect to r
     x = k r_box, where k is the wave number
+
+    revised to avoid K = u'/u singularity when u -> 0
+    includes sign correction to prevent artificial pi-shifts
     """
 
     # obtaining u
@@ -182,12 +185,7 @@ def phase_shift_raw_solver(E, r_box, r_start, N_points, l, Z):
     u_Nm4 = u_array[-5]
     u_prime_end = (25*u_N - 48*u_Nm1 + 36*u_Nm2 - 16*u_Nm3 + 3*u_Nm4) / (12 * dr)
     
-    # finding K, but K uses radial wave function while u that we have is the reduced version
-    # R = u/r --> K = R'/R = u'/u - 1/r (from quotient rule and chain rule)
-    # adding infinitesimal term to denominator to avoid division by 0
-    K = u_prime_end / (u_N + 1e-15) - 1.0 / r_box 
-
-    # evaluating formula
+    # evaluating formula terms
     V_edge = potential_solver(r_box, Z)
     k_end = k_solver(E, V_edge)
     x = k_end * r_box
@@ -197,10 +195,24 @@ def phase_shift_raw_solver(E, r_box, r_start, N_points, l, Z):
     n_val = sph_neumann(l, x)
     n_der = sph_neumann_deriv(l, x)
     
-    num = K * j_val - k_end * j_der
-    den = K * n_val - k_end * n_der
+    # K_times_u = u' - u/r (to avoid numerical instability when calculating logarithmic derivative)
+    K_times_u = u_prime_end - (u_N / r_box)
+
+    # standard formula: (K*j - k*j') / (K*n - k*n')
+    # multiplied by u:  ((Ku)*j - u*k*j') / ((Ku)*n - u*k*n')
     
-    return num, den
+    num_robust = K_times_u * j_val - u_N * k_end * j_der
+    den_robust = K_times_u * n_val - u_N * k_end * n_der
+    
+    # implementing sign correction:
+    # multiplied by u_N to fix the singularity
+    # but if u_N < 0, we flipped the vector into the opposite quadrant (adding pi)
+    # so we can calculate the sign of u_N to un-flip it
+    # using jnp.sign: returns -1, 0, or 1. 
+    
+    u_sign = jnp.sign(u_N)
+    
+    return num_robust * u_sign, den_robust * u_sign
 
 @partial(jit, static_argnames = ['N_points', 'l'])
 def phase_shift_denominator(E, r_box, r_start, N_points, l, Z):
