@@ -3,7 +3,8 @@
 import jax
 import jax.numpy as jnp
 import jax.scipy.linalg as jla
-from jax import jit
+from jax import jit, lax
+from jax.nn import sigmoid
 from functools import partial
 from jax.experimental import sparse
 jax.config.update("jax_enable_x64", True)
@@ -11,7 +12,7 @@ jax.config.update("jax_enable_x64", True)
 # %% functions
 
 # @jit for faster running but N_points is a static argument so using @partial
-@partial(jit, static_argnames = ['N_points'])
+@partial(jit, static_argnames = ['N_points', 'use_log_grid'])
 def numerov_solver(r_box, r_start, N_points, l, Z = 1, use_log_grid = True):
     """ 
     solves the radial schrodinger equation using numerov method.
@@ -138,52 +139,55 @@ def cholesky_solve(A,B):
 
     return eigvals, eigvecs
 
-@partial(jit, static_argnames = ['N_points', 'l_max'])
-def U_solver_nonhybrid(temp, r_box, r_start, N_points, Z, l_max):
-    """ 
-    implementing boltzmann statistics for the calculation of
-    internal energy as a function of temperature and r_max
-
-    inputs: 
-    temp - temperature (in Ha, 1 Ha = 315775 K)
-    r_box - box size for solving the Schrodinger equation (in Ha)
-    r_start - start point for r_points, r_points[0]
-    N_points - # of r_points used for numerov solver
-    Z - atomic number
-    l_max - max l we consider until, when looping through the numerov solver
-    to obtain energy eigenvalues for different l
-
-    outputs: 
-    U - scalar value of the internal energy (in Ha, 1 Ha = 27.2 eV)
+@partial(jit, static_argnames=['N_points', 'l_max'])
+def U_solver_nonhybrid(temp, r_box, r_start, N_points, Z_atom, l_max=10):
     """
-
+    Calculates internal energy using Fermi-Dirac statistics.
+    Solves for chemical potential (mu) to satisfy charge neutrality.
+    """
     l_array = jnp.arange(l_max + 1)
+    
+    # 1. Get Energies (using Log Grid for accuracy)
+    # Note: We pass use_log_grid=True
+    numerov_vect = jax.vmap(numerov_solver, in_axes=(None, None, None, 0, None, None))
+    energies, _ = numerov_vect(r_box, r_start, N_points, l_array, Z_atom, True)
+    
+    # 2. Degeneracy Factors (2 * (2l + 1))
+    g_l = 2 * (2 * l_array + 1)
+    g_l_matrix = g_l[:, None] # Reshape for broadcasting
+    
+    # 3. Define N(mu) function
+    def calculate_N(mu_val):
+        # Fermi-Dirac: 1 / (exp((E-mu)/T) + 1)
+        # using sigmoid((mu-E)/T) for numerical stability
+        occ = sigmoid((mu_val - energies) / temp)
+        return jnp.sum(occ * g_l_matrix)
 
-    energies = jnp.zeros((len(l_array), N_points-2))
-
-    # everything constant except for the last input for numerov_solver which is l
-    numerov_vect = jax.vmap(numerov_solver, in_axes = (None, None, None, 0, None))
-    energies, _ = numerov_vect(r_box, r_start, N_points, l_array, Z)
-
-    # calculating degeneracy factors, basically how many slots open for each l
-    # 2 for spin, and 2*l+1 for magnetic quantum number so:
-    g_l = 2*(2*l_array + 1)
-
-    # resizing matrix so it can be used for matrix multiplication
-    g_l_matrix = g_l[:, None]
-
-    # calculating weighted using the degeneracy factor and boltzmann factor
-    f_i = g_l_matrix * jnp.exp(-energies / temp)
-
-    # calculating normalization constant to divide everything by, such that
-    # all the probabilities will add up to 1 (partition function)
-    Z = jnp.sum(f_i)
-
-    # obtaining average internal energy of the atom by adding up each energy 
-    # eigenvalue with their corresponding weighting
-    U = jnp.sum(energies * f_i) / Z
-
-    return U
+    # 4. Solve for mu (Bisection Method)
+    # We need to find mu such that Total N = Z_atom
+    # Search range: roughly around the ground state energy up to positive
+    mu_min = jnp.min(energies) - 2.0  
+    mu_max = 10.0 
+    
+    def bisection_step(i, bounds):
+        low, high = bounds
+        mid = (low + high) / 2.0
+        N_mid = calculate_N(mid)
+        # If we have too few electrons, we need higher mu -> low = mid
+        new_low = jnp.where(N_mid < Z_atom, mid, low)
+        new_high = jnp.where(N_mid < Z_atom, high, mid)
+        return (new_low, new_high)
+        
+    final_low, final_high = lax.fori_loop(0, 50, bisection_step, (mu_min, mu_max))
+    mu_correct = (final_low + final_high) / 2.0
+    
+    # 5. Calculate U using correct mu
+    occ_final = sigmoid((mu_correct - energies) / temp)
+    
+    # U = Sum(Energy * Occupancy * Degeneracy)
+    U_total = jnp.sum(energies * occ_final * g_l_matrix)
+    
+    return U_total
 
 @partial(jit, static_argnames = ['N_points', 'k'])
 def lobpcg_solver(r_box, r_start, N_points, l, k):
