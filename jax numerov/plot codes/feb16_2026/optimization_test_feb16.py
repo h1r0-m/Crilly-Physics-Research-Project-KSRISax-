@@ -35,7 +35,7 @@ install()
 def main():
     # U vs smaller r_box with higher N_points
 
-    r_box_array = jnp.linspace(1.5, 2, num = 100)
+    r_box_array = jnp.linspace(1, 2, num = 10)
     Z = 1
     r_start = 1e-5
     N_points = 300
@@ -43,15 +43,15 @@ def main():
     U_array_optimized = []
     # U_array_corrected = []
     # U_array_uncorrected = []
-    # U_array_numerov = []
+    U_array_numerov = []
 
     count = 0
 
     for r in r_box_array:
 
-        # U = U_solver_nonhybrid(T_ha, r, r_start, N_points, Z, 300)
+        U = U_solver_nonhybrid(T_ha, r, r_start, N_points, Z, 300)
 
-        # U_array_numerov.append(U)
+        U_array_numerov.append(U)
 
         e,m,d = bounded_states_solver(r, r_start, N_points, Z)
 
@@ -78,7 +78,7 @@ def main():
         print(f"count = {count}")
 
     plt.figure(figsize=(10,6))
-    # plt.plot(r_box_array, jnp.array(U_array_numerov) * 27.2114, linestyle = ":", marker = "x", color = "blue", label = "Non-hybrid")
+    plt.plot(r_box_array, jnp.array(U_array_numerov) * 27.2114, linestyle = ":", marker = "x", color = "blue", label = "Non-hybrid")
     # plt.plot(r_box_array, jnp.array(U_array_corrected) * 27.2114, linestyle = "-", marker = "x", color = "pink", label = "Hybrid (Corrected)")
     plt.plot(r_box_array, jnp.array(U_array_optimized) * 27.2114, linestyle = "--", marker = "x", color = "green", label = "Hybrid (Corrected + Optimized)")
     # plt.plot(r_box_array, jnp.array(U_array_uncorrected) * 27.2114, linestyle = "--", marker = "x", color = "red", label = "Hybrid (Not Corrected)")

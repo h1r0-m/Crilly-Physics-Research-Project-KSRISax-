@@ -12,8 +12,11 @@ jax.config.update("jax_enable_x64", True)
 
 # @jit for faster running but N_points is a static argument so using @partial
 @partial(jit, static_argnames = ['N_points'])
-def numerov_solver(r_box, r_start, N_points, l, Z = 1):
+def numerov_solver(r_box, r_start, N_points, l, Z = 1, use_log_grid = True):
     """ 
+    solves the radial schrodinger equation using numerov method.
+    supports both linear and logarithmic grids
+
     inputs(all in atomic units):
     r_box: endpoint for r_points, infinite potential (hard wall)
     r_start: r_points(0) <-- not 0 because singularity
@@ -27,32 +30,80 @@ def numerov_solver(r_box, r_start, N_points, l, Z = 1):
     the wave function for the nth energy state
     """
     
-    # defining distance interval and creating array for points of analysis
-    d = (r_box - r_start) / (N_points - 1)
-    r_points = jnp.linspace(r_start, r_box, N_points)
+    if use_log_grid:
+        # setting up logarithmic grid, defining uniform grid in x = ln(r)
+        x_start = jnp.log(r_start)
+        x_end   = jnp.log(r_box)
+        dx      = (x_end - x_start) / (N_points - 1)
+        x_points = jnp.linspace(x_start, x_end, N_points)
+        r_points = jnp.exp(x_points)
+        
+        # numerov matrices (A and B) using dx
+        diag_main = -2 * jnp.ones(N_points - 2)
+        diag_off  =  1 * jnp.ones(N_points - 3)
+        
+        A = (jnp.diag(diag_main, k=0) + jnp.diag(diag_off, k=-1) + jnp.diag(diag_off, k=1)) / dx**2
+        
+        B_main = 10 * jnp.ones(N_points - 2)
+        B_off  =  1 * jnp.ones(N_points - 3)
+        B = (jnp.diag(B_main, k=0) + jnp.diag(B_off, k=-1) + jnp.diag(B_off, k=1)) / 12
 
-    # creating matrices for numerov
-    A_lower = jnp.ones(N_points-3)
-    A_mid = -2 * jnp.ones(N_points-2)
-    A_upper = jnp.ones(N_points-3)
-    A = (jnp.diag(A_lower, k = -1) + jnp.diag(A_mid, k = 0) + jnp.diag(A_upper, k = 1)) / d ** 2
+        # Hamiltonian Construction for Log Grid
+        # equation is: -1/2 d^2/dx^2 + U_eff = E * r^2
+        
+        # r squared (needed for the RHS of the generalized eigenvalue problem)
+        r2_vec = r_points[1:-1]**2
+        R2 = jnp.diag(r2_vec)
+        
+        # potential V(r)
+        V_r = -Z / r_points[1:-1] # Coulomb
+        
+        # effective potential in log coordinates
+        # U_diag = r^2 * V(r) + 1/2 * (l + 1/2)^2
+        centrifugal_log = 0.5 * (l + 0.5)**2
+        U_vec = (r2_vec * V_r) + centrifugal_log
+        U_diag = jnp.diag(U_vec)
+        
+        # H = -1/2 * A + B * U_eff
+        H = -0.5 * A + B @ U_diag
+        
+        # the metric matrix (RHS)
+        # solving H * psi = E * (B * r^2) * psi
+        S = B @ R2 
+        
+        # solving generalized eigenvalue problem
+        energies, psi_transformed = cholesky_solve(H, S)
+        
+        # psi_transformed is u(r)/sqrt(r)
+        return energies, psi_transformed
 
-    B_lower = jnp.ones(N_points - 3)
-    B_mid = 10 * jnp.ones(N_points-2)
-    B_upper = jnp.ones(N_points-3)
-    B = (jnp.diag(B_lower, k = -1) + jnp.diag(B_mid, k = 0) + jnp.diag(B_upper, k = 1)) / 12
+    else:
+        # defining distance interval and creating array for points of analysis
+        d = (r_box - r_start) / (N_points - 1)
+        r_points = jnp.linspace(r_start, r_box, N_points)
 
-    # potential terms, V_eff = coulomb + centrifugal for now
-    V_eff_vec = -Z / r_points + l * (l+1) / (2 * r_points ** 2)
-    V_eff = jnp.diag(V_eff_vec[1:-1], k = 0)
+        # creating matrices for numerov
+        A_lower = jnp.ones(N_points-3)
+        A_mid = -2 * jnp.ones(N_points-2)
+        A_upper = jnp.ones(N_points-3)
+        A = (jnp.diag(A_lower, k = -1) + jnp.diag(A_mid, k = 0) + jnp.diag(A_upper, k = 1)) / d ** 2
 
-    # constructing Hamiltonian matrix
-    H = -1/2 * A + B @ V_eff
+        B_lower = jnp.ones(N_points - 3)
+        B_mid = 10 * jnp.ones(N_points-2)
+        B_upper = jnp.ones(N_points-3)
+        B = (jnp.diag(B_lower, k = -1) + jnp.diag(B_mid, k = 0) + jnp.diag(B_upper, k = 1)) / 12
 
-    # obtaining eigenvals / vecs from cholesky decomposition
-    energies, psi = cholesky_solve(H,B)
+        # potential terms, V_eff = coulomb + centrifugal for now
+        V_eff_vec = -Z / r_points + l * (l+1) / (2 * r_points ** 2)
+        V_eff = jnp.diag(V_eff_vec[1:-1], k = 0)
 
-    return energies, psi
+        # constructing Hamiltonian matrix
+        H = -1/2 * A + B @ V_eff
+
+        # obtaining eigenvals / vecs from cholesky decomposition
+        energies, psi = cholesky_solve(H,B)
+
+        return energies, psi
 
 @jit
 def cholesky_solve(A,B):
