@@ -72,6 +72,9 @@ def numerov_solver(r_box, r_start, N_points, l, Z = 1, use_log_grid = True):
         # solving H * psi = E * (B * r^2) * psi
         S = B @ R2 
         
+        # symmetrizing S to prevent Cholesky instability
+        S = 0.5 * (S + S.T)
+
         # solving generalized eigenvalue problem
         energies, psi_transformed = cholesky_solve(H, S)
         

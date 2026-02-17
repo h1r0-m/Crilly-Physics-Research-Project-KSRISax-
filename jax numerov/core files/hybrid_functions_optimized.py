@@ -43,7 +43,7 @@ def fd_occup_solver(E, mu, T):
     return sigmoid((mu - E) / T)
 
 @partial(jit, static_argnames=['N_points', 'l_max'])
-def bounded_states_solver(r_box, r_start, N_points, Z, l_max=5):
+def bounded_states_solver(r_box, r_start, N_points, Z, l_max=5, is_log_grid = True):
     """
     pasted straight from the uncorrected code file
 
@@ -61,8 +61,8 @@ def bounded_states_solver(r_box, r_start, N_points, Z, l_max=5):
 
     # using numerov solver for l = 0 to l_max
     l_array = jnp.arange(l_max + 1)
-    numerov_vect = jax.vmap(numerov_solver, in_axes=(None, None, None, 0, None))
-    energies, _ = numerov_vect(r_box, r_start, N_points, l_array, Z)
+    numerov_vect = jax.vmap(numerov_solver, in_axes=(None, None, None, 0, None, None))
+    energies, _ = numerov_vect(r_box, r_start, N_points, l_array, Z, is_log_grid)
     
     # creating mask for bound states
     mask = jnp.where(energies < 0, 1, 0)
@@ -246,17 +246,17 @@ def correction_grid_solver_jax(mu, T, E_max):
     full_grid - grid of energy points that can later be used to calculate correction terms
     """
     
-    # base logarithmic grid of 200 points, can make finer if wanted
-    log_grid = jnp.logspace(jnp.log10(1e-4), jnp.log10(E_max), 200)
+    # base logarithmic grid of 300 points, can make finer if wanted
+    log_grid = jnp.logspace(jnp.log10(1e-4), jnp.log10(E_max), 300)
     
-    # very low energy grid of 20 points to capture resonance around E = 0
-    low_e_grid = jnp.linspace(1e-16, 1e-4, 20)
+    # very low energy grid of 200 points to capture resonance around E = 0
+    low_e_grid = jnp.linspace(1e-16, 1e-4, 200)
     
-    # grid for mu of 21 points to capture change in fermi-dirac occupation
+    # grid for mu of 41 points to capture change in fermi-dirac occupation
     # this "width" of change depends on T, because higher T means more spread out
     # and lower T means more sudden change. therefore this grid width is from -4T
     # to +4T from E = mu to capture this behavior accurately
-    mu_window = jnp.linspace(-4.0, 4.0, 21) * T
+    mu_window = jnp.linspace(-4.0, 4.0, 41) * T
     mu_grid = mu + mu_window
     
     # filtering points to mu_grid that are invalid (e.g. if E <= 0 or E > E_max)
@@ -444,7 +444,9 @@ def N_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, m
     # endpoint for energy grid, when fermi-dirac occupation becomes negligible
     # f = 1/(exp((E-mu)/T) + 1) say when that becomes e^-20, such that
     # exp((E-mu)/T) = exp(20) - 1 approx exp(20) --> E-mu/T = 20 and
-    # E = 20*T + mu, therefore choosing that as E_max, default value of 5
+    # E = 20*T + mu, therefore choosing that as E_max
+    # default value of 5 because this might turn out negative if mu is negative
+    # which will break the calculation since it includes jnp.log10(E_max)
     E_max = jnp.maximum(mu + 20 * T, 5.0)
 
     # getting grid
