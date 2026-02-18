@@ -25,8 +25,7 @@ import matplotlib.pyplot as plt
 import time
 
 from scipy.signal import argrelextrema
-from hybrid_functions_optimized import mu_solver_corrected, thermo_solver_corrected, bounded_states_solver, U_solver_corrected
-from hybrid_functions_corrected import mu_solver_corrected as msc, U_solver_corrected as Usc
+from hybrid_functions_optimized import bounded_states_solver, mu_solver_corrected, U_solver_corrected
 from hybrid_functions_uncorrected import mu_solver_uncorrected, U_solver_uncorrected
 from njax_functions import U_solver_nonhybrid
 
@@ -95,7 +94,7 @@ def benchmark_runtime():
 
     # saving
     main_folder = "plots"
-    sub_folder = "feb17_2026"
+    sub_folder = "feb18_2026"
 
     # 1. Get the current timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

@@ -230,50 +230,109 @@ def phase_shift_raw_solver(E, r_box, r_start, N_points, l, Z):
 
     return num_robust * u_sign, den_robust * u_sign
 
-@jit
-def correction_grid_solver_jax(mu, T, E_max):
+@partial(jit, static_argnames=['N_points'])
+def get_phase_shift_denom(E, r_box, r_start, N_points, l, Z):
+    # Just call the raw solver and grab the second output (denominator)
+    _, den = phase_shift_raw_solver(E, r_box, r_start, N_points, l, Z)
+    return den
+
+@partial(jit, static_argnames=['N_points'])
+def correction_grid_solver_jax(r_box, r_start, N_points, mu, T, l, Z, E_max):
     """
-    function for grid generation that is compatible for jit compilation
-    instead of finding where resonance occurs, can just create a fixed-size,
-    high-density grid that concentrates points both closer to E = 0 - for resonance) and around E = mu (for when the fermi-dirac occupation changes most suddenly)
-
-    inputs:
-    mu - chemical potential
-    T - temperature
-    E_max - max E for grid generation, usually when fermi-dirac occupation becomes negligible
-
-    output:
-    full_grid - grid of energy points that can later be used to calculate correction terms
+    JIT-compatible adaptive grid solver.
+    1. Scans for resonances (denominator sign changes).
+    2. Refines resonances using bisection.
+    3. Returns a grid with high density around found resonances.
     """
     
-    # base logarithmic grid of 300 points, can make finer if wanted
-    log_grid = jnp.logspace(jnp.log10(1e-4), jnp.log10(E_max), 300)
+    # 1. COARSE SCAN
+    # Create a coarse scan grid to catch sign changes
+    # 100 points usually enough to catch the "bracket"
+    scan_grid = jnp.logspace(jnp.log10(1e-4), jnp.log10(E_max), 100)
     
-    # very low energy grid of 200 points to capture resonance around E = 0
-    low_e_grid = jnp.linspace(1e-16, 1e-4, 200)
+    # Evaluate denominator on scan grid
+    denoms = jax.vmap(lambda E: get_phase_shift_denom(E, r_box, r_start, N_points, l, Z))(scan_grid)
     
-    # grid for mu of 41 points to capture change in fermi-dirac occupation
-    # this "width" of change depends on T, because higher T means more spread out
-    # and lower T means more sudden change. therefore this grid width is from -4T
-    # to +4T from E = mu to capture this behavior accurately
-    mu_window = jnp.linspace(-4.0, 4.0, 41) * T
-    mu_grid = mu + mu_window
+    # Find sign changes: sign(d[i]) != sign(d[i+1])
+    signs = jnp.sign(denoms)
+    # diff will be non-zero where sign changes
+    crossings = jnp.abs(jnp.diff(signs)) > 0.5 
     
-    # filtering points to mu_grid that are invalid (e.g. if E <= 0 or E > E_max)
-    # replacing invalid points with a dummy value (e.g. 1e-10), cuz arrays have
-    # to be fixed size for jit compilation
-    mu_grid = jnp.where((mu_grid > 1e-16) & (mu_grid < E_max), mu_grid, 1e-10)
+    # Get indices of the left side of the crossing
+    # We take top 3 crossings (max_resonances = 3). 
+    # If fewer are found, we pad with index 0 (handled later).
+    crossing_indices = jnp.where(crossings, jnp.arange(99), 9999)
+    sorted_indices = jnp.sort(crossing_indices)
+    
+    # 2. BISECTION (Batched)
+    def find_root_bisection(idx):
+        # If idx is dummy (9999), return a dummy root (e.g., -1.0)
+        # Use Lax.cond to handle bounds check safely
+        is_valid = idx < 99
+        
+        # Define bounds based on scan grid
+        # We need to clamp idx to be safe for array access even if invalid
+        safe_idx = jnp.minimum(idx, 98) 
+        
+        low = scan_grid[safe_idx]
+        high = scan_grid[safe_idx + 1]
+        
+        # Bisection loop body
+        def step(i, bounds):
+            l_curr, h_curr = bounds
+            mid = (l_curr + h_curr) / 2.0
+            d_mid = get_phase_shift_denom(mid, r_box, r_start, N_points, l, Z)
+            
+            # If sign(d_mid) == sign(d_low), root is in upper half
+            d_low = get_phase_shift_denom(l_curr, r_box, r_start, N_points, l, Z)
+            
+            # Standard bisection check
+            move_up = jnp.sign(d_mid) == jnp.sign(d_low)
+            
+            l_next = jnp.where(move_up, mid, l_curr)
+            h_next = jnp.where(move_up, h_curr, mid)
+            return (l_next, h_next)
+        
+        # Run 20 iterations of bisection (plenty for high precision)
+        final_l, final_h = lax.fori_loop(0, 20, step, (low, high))
+        root = (final_l + final_h) / 2.0
+        
+        # If input was invalid, return -1.0 so we can filter it later
+        return jnp.where(is_valid, root, -1.0)
 
-    # concatenating all grids 
-    full_grid = jnp.concatenate([low_e_grid, log_grid, mu_grid])
+    # We search for up to 3 resonances (slots)
+    max_resonances = 10
+    resonance_indices = sorted_indices[:max_resonances]
+    roots = jax.vmap(find_root_bisection)(resonance_indices)
     
-    # sorting the grid 
+    # 3. BUILD GRID
+    # Base Log Grid
+    base_grid = jnp.logspace(jnp.log10(1e-4), jnp.log10(E_max), 200)
+    low_e_grid = jnp.linspace(1e-16, 1e-4, 100)
+    mu_window = jnp.linspace(-4.0, 4.0, 41) * T + mu
+    mu_grid = jnp.where((mu_window > 1e-16) & (mu_window < E_max), mu_window, 1e-10)
+    
+    # Resonance clusters
+    # For each root, generate points: root * [0.999, 1.0, 1.001, etc]
+    # We define a cluster pattern relative to 1.0
+    factors = jnp.array([0.99, 0.999, 0.9999, 1.0, 1.0001, 1.001, 1.01])
+    
+    # Shape: (3 roots, 7 factors) -> flatten to (21 points)
+    res_points = jnp.outer(roots, factors).flatten()
+    
+    # Filter dummy roots (roots that were -1.0)
+    # We replace them with 1e-10 (safe dummy value)
+    res_points = jnp.where(res_points > 0, res_points, 1e-10)
+    
+    # Combine everything
+    full_grid = jnp.concatenate([low_e_grid, base_grid, mu_grid, res_points])
     full_grid = jnp.sort(full_grid)
     
-    # just a note, but even if there are duplicate points in the grid, shouldnt
-    # affect calculation because the trapezoidal rule later to calculate
-    # correction would just add 0 contribution if change in E is 0 in that energy interval
-
+    # Filter out values > E_max or duplicates (simple diff check)
+    # In JAX fixed size, we can't delete, but we can set duplicates to neighbor
+    # (Trapezoidal integration will just give 0 area for dx=0, which is fine)
+    full_grid = jnp.clip(full_grid, 1e-16, E_max)
+    
     return full_grid
 
 @partial(jit, static_argnames=['N_points'])
@@ -390,14 +449,14 @@ def thermo_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_poin
     # E = 20*T + mu, therefore choosing that as E_max, default value of 5
     E_max = jnp.maximum(mu + 20 * T, 5.0)
 
-    # getting grid
-    grid = correction_grid_solver_jax(mu, T, E_max)
-
     # using lax.scan to compute correction term across l 
     def scan_body(carry, l):
         # current correction term totals
         n_acc, u_acc, s_acc = carry
         
+        # getting grid
+        grid = correction_grid_solver_jax(r_box, r_start, N_points, mu, T, l, Z, E_max)
+
         # computing additional correction term
         n_c, u_c, s_c = correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z)
         
@@ -449,13 +508,13 @@ def N_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, m
     # which will break the calculation since it includes jnp.log10(E_max)
     E_max = jnp.maximum(mu + 20 * T, 5.0)
 
-    # getting grid
-    grid = correction_grid_solver_jax(mu, T, E_max)
-
     # using lax.scan to compute correction term across l 
     def scan_body(carry, l):
         # current correction term totals
         n_acc = carry
+        
+        # getting grid
+        grid = correction_grid_solver_jax(r_box, r_start, N_points, mu, T, l, Z, E_max)
         
         # computing additional correction term
         n_c, _, _ = correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z)
@@ -504,14 +563,14 @@ def U_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, m
     # E = 20*T + mu, therefore choosing that as E_max, default value of 5
     E_max = jnp.maximum(mu + 20 * T, 5.0)
 
-    # getting grid
-    grid = correction_grid_solver_jax(mu, T, E_max)
-
     # using lax.scan to compute correction term across l 
     def scan_body(carry, l):
         # current correction term totals
         u_acc = carry
         
+        # getting grid
+        grid = correction_grid_solver_jax(r_box, r_start, N_points, mu, T, l, Z, E_max)
+
         # computing additional correction term
         _, u_c, _ = correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z)
         
@@ -564,14 +623,14 @@ def S_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, m
     # E = 20*T + mu, therefore choosing that as E_max, default value of 5
     E_max = jnp.maximum(mu + 20 * T, 5.0)
 
-    # getting grid
-    grid = correction_grid_solver_jax(mu, T, E_max)
-
     # using lax.scan to compute correction term across l 
     def scan_body(carry, l):
         # current correction term totals
         s_acc = carry
         
+        # getting grid
+        grid = correction_grid_solver_jax(r_box, r_start, N_points, mu, T, l, Z, E_max)
+
         # computing additional correction term
         s_c = correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z)
         
