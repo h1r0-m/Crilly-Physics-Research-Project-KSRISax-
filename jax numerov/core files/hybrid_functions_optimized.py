@@ -232,105 +232,124 @@ def phase_shift_raw_solver(E, r_box, r_start, N_points, l, Z):
 
 @partial(jit, static_argnames=['N_points'])
 def get_phase_shift_denom(E, r_box, r_start, N_points, l, Z):
-    # Just call the raw solver and grab the second output (denominator)
+    """ function to just call raw phase shift solver and get the denominator (second output)
+        """
     _, den = phase_shift_raw_solver(E, r_box, r_start, N_points, l, Z)
     return den
 
 @partial(jit, static_argnames=['N_points'])
 def correction_grid_solver_jax(r_box, r_start, N_points, mu, T, l, Z, E_max):
     """
-    JIT-compatible adaptive grid solver.
-    1. Scans for resonances (denominator sign changes).
-    2. Refines resonances using bisection.
-    3. Returns a grid with high density around found resonances.
+    function for grid generation that is compatible for jit compilation
+    scans for resonances --> refines position using bisection method, and then returns a grid with high density around found resonances
+
+    inputs:
+    r_box, r_start, N_points - standard
+    mu - chemical potential
+    T - temperature
+    l - orbital quantum number
+    Z - atomic number
+    E_max - max E for grid generation, usually when fermi-dirac occupation becomes negligible
+
+    output:
+    full_grid - grid of energy points that can later be used to calculate correction terms
     """
     
-    # 1. COARSE SCAN
-    # Create a coarse scan grid to catch sign changes
-    # 100 points usually enough to catch the "bracket"
+    # creating coarse scan grid to catch sign changes in the denominator of phase shift formula - resonance happens when denominator = 0
     scan_grid = jnp.logspace(jnp.log10(1e-4), jnp.log10(E_max), 100)
     
-    # Evaluate denominator on scan grid
+    # evaluating denominator on scan grid
     denoms = jax.vmap(lambda E: get_phase_shift_denom(E, r_box, r_start, N_points, l, Z))(scan_grid)
     
-    # Find sign changes: sign(d[i]) != sign(d[i+1])
+    # extracting signs of the denominator at each point on the grid
     signs = jnp.sign(denoms)
+
     # diff will be non-zero where sign changes
     crossings = jnp.abs(jnp.diff(signs)) > 0.5 
     
-    # Get indices of the left side of the crossing
-    # We take top 3 crossings (max_resonances = 3). 
-    # If fewer are found, we pad with index 0 (handled later).
+    # if thers is a sign change within an interval, then resonance is occuring in that interval, so crossings = True. when that happens, replace it with actual index, and if = False (no resonance) --> then dummy index variable 9999
+    # so basically it becomes like [... 9999 12 9999 9999 14 9999 ...] with the array mostly being dummy variables but some actual indices where resonance occurs
     crossing_indices = jnp.where(crossings, jnp.arange(99), 9999)
+
+    # puts all the resonance indices to the front such that its like [12 14 9999 9999 ...]
     sorted_indices = jnp.sort(crossing_indices)
     
-    # 2. BISECTION (Batched)
+    # function for bisection method --> finding the accurate position of the resonance between the interval that we found 
     def find_root_bisection(idx):
-        # If idx is dummy (9999), return a dummy root (e.g., -1.0)
-        # Use Lax.cond to handle bounds check safely
+        # if the index is a dummy (9999), then return dummy root (e.g. -1.0 designated later)
         is_valid = idx < 99
         
-        # Define bounds based on scan grid
-        # We need to clamp idx to be safe for array access even if invalid
+        # creates an array for safe indices to use for slicing scan_grid because scan_grid[9999] would produce an error if theres only 99 indices 
         safe_idx = jnp.minimum(idx, 98) 
         
+        # boundaries for bisection method
         low = scan_grid[safe_idx]
         high = scan_grid[safe_idx + 1]
         
-        # Bisection loop body
+        # body of the bisection loop
         def step(i, bounds):
+            # bounds is the carry, so its composed of the lower and higher boundary for bisection
             l_curr, h_curr = bounds
+
+            # midpoint
             mid = (l_curr + h_curr) / 2.0
+
+            # getting denom of phase shift formula at both lower boundary and midpoint
             d_mid = get_phase_shift_denom(mid, r_box, r_start, N_points, l, Z)
-            
-            # If sign(d_mid) == sign(d_low), root is in upper half
             d_low = get_phase_shift_denom(l_curr, r_box, r_start, N_points, l, Z)
             
-            # Standard bisection check
+            # if sign is different between low and mid, then search interval has to be between mid and high
             move_up = jnp.sign(d_mid) == jnp.sign(d_low)
-            
             l_next = jnp.where(move_up, mid, l_curr)
             h_next = jnp.where(move_up, h_curr, mid)
+
+            # carry to next iteration
             return (l_next, h_next)
         
-        # Run 20 iterations of bisection (plenty for high precision)
+        # running 20 iterations of bisection (can change later)
         final_l, final_h = lax.fori_loop(0, 20, step, (low, high))
         root = (final_l + final_h) / 2.0
         
-        # If input was invalid, return -1.0 so we can filter it later
+        # if input was invalid, return -1.0 so we can filter it later
         return jnp.where(is_valid, root, -1.0)
 
-    # We search for up to 3 resonances (slots)
+    # searching precise position of resonance for up to 10 intervals where resonance exists
     max_resonances = 10
     resonance_indices = sorted_indices[:max_resonances]
     roots = jax.vmap(find_root_bisection)(resonance_indices)
     
-    # 3. BUILD GRID
-    # Base Log Grid
+    # building grid for output
+
+    # base grid
     base_grid = jnp.logspace(jnp.log10(1e-4), jnp.log10(E_max), 200)
+
+    # grid at low energy (most likely to have resonances)
     low_e_grid = jnp.linspace(1e-16, 1e-4, 100)
+
+    # grid for mu to capture change in fermi-dirac occupation
+    # this "width" of change depends on T, because higher T means more spread out and lower T means more sudden change. therefore this grid width is from -4T to +4T from E = mu to capture this behavior accurately
     mu_window = jnp.linspace(-4.0, 4.0, 41) * T + mu
+
+    # if the points for the mu grid are valid, then keep it, if not then just replace by dummy energy point 1e-10
     mu_grid = jnp.where((mu_window > 1e-16) & (mu_window < E_max), mu_window, 1e-10)
     
-    # Resonance clusters
-    # For each root, generate points: root * [0.999, 1.0, 1.001, etc]
-    # We define a cluster pattern relative to 1.0
+    # grid points for the resonance locations
+    # for each resonance, generating grid points: root * [0.999, 1.0, 1.001, etc.]
     factors = jnp.array([0.99, 0.999, 0.9999, 1.0, 1.0001, 1.001, 1.01])
     
-    # Shape: (3 roots, 7 factors) -> flatten to (21 points)
+    # (10 roots, 7 factors) -> flatten to an array of 70 points
     res_points = jnp.outer(roots, factors).flatten()
     
-    # Filter dummy roots (roots that were -1.0)
-    # We replace them with 1e-10 (safe dummy value)
+    # filtering out dummy roots (roots that were -1.0) so that the corresponding grid points for those roots dont make it to the final grid (if root is -1.0 then factor * root is negative, so filtering out negative points basically)
+    # replacing with dummy value 1e-10 (same as the dummy value for invalid points for mu)
     res_points = jnp.where(res_points > 0, res_points, 1e-10)
     
-    # Combine everything
+    # combining all the grid points and sorting it 
     full_grid = jnp.concatenate([low_e_grid, base_grid, mu_grid, res_points])
     full_grid = jnp.sort(full_grid)
     
-    # Filter out values > E_max or duplicates (simple diff check)
-    # In JAX fixed size, we can't delete, but we can set duplicates to neighbor
-    # (Trapezoidal integration will just give 0 area for dx=0, which is fine)
+    # safety filter for values that are > E_max or < 1e-16
+    # duplicates are fine because the trapezoidal integration will just give 0 area for where dx = 0 which doesnt contribute anything to the correction term
     full_grid = jnp.clip(full_grid, 1e-16, E_max)
     
     return full_grid
