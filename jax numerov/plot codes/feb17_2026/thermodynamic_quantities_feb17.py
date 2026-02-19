@@ -62,7 +62,7 @@ def run_sweeps():
     def save_plot(x, y, xlabel, ylabel, title, filename, color='blue', linestyle='-'):
         # saving
         main_folder = "plots"
-        sub_folder = "feb17_2026"
+        sub_folder = "feb18_2026"
 
         # 1. Get the current timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -153,7 +153,7 @@ def run_sweeps():
     plt.title("Entropy Consistency Check vs T"); plt.legend(); plt.grid(True)
     # saving
     main_folder = "plots"
-    sub_folder = "feb17_2026"
+    sub_folder = "feb18_2026"
 
     # 1. Get the current timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
