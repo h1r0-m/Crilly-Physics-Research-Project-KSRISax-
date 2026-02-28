@@ -651,7 +651,7 @@ def S_solver_corrected(energies, mask, degeneracies, r_box, r_start, N_points, m
         grid = correction_grid_solver_jax(r_box, r_start, N_points, mu, T, l, Z, E_max)
 
         # computing additional correction term
-        s_c = correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z)
+        _, _, s_c = correction_value_solver(grid, r_box, r_start, N_points, mu, T, l, Z)
         
         # adding to carry
         new_carry = s_acc + s_c

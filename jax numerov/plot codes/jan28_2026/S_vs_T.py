@@ -23,8 +23,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from scipy.signal import argrelextrema
-from hybrid_functions_corrected import mu_solver_corrected, U_solver_corrected, S_solver_corrected
-from hybrid_functions_uncorrected import bounded_states_solver, mu_solver_uncorrected, U_solver_uncorrected
+from hybrid_functions_optimized import bounded_states_solver, mu_solver_corrected, U_solver_corrected, S_solver_corrected
 
 from rich.traceback import install
 install()
@@ -92,17 +91,17 @@ def main():
     s_theory_smooth = sackur_tetrode_theoretical(t_theory_range, r_box)
 
     plt.figure(figsize=(10,6))
-    plt.plot(T_array * 315775, jnp.array(S_array_corrected), linestyle="-", marker="x", color="red", label= "Corrected Simulation")
+    plt.plot(T_array * 315775, jnp.array(S_array_corrected), linestyle="-", marker="x", color="red", label= "Hybrid (Corrected)")
     plt.plot(t_theory_range, s_theory_smooth, 'b-', label='Sackur-Tetrode (Theory)')
     plt.xlabel("Temperature (K)")
-    plt.ylabel("Entropy (Ha)")
-    plt.title(f"Entropy vs Temperature (rbox={r_box}, N_points={N_points}, Z={Z})")
+    plt.ylabel("Entropy (k_B)")
+    # plt.title(f"Entropy vs Temperature (rbox={r_box}, N_points={N_points}, Z={Z})")
     plt.legend()
     plt.grid(True)
 
     # saving
     main_folder = "plots"
-    sub_folder = "jan28_2026"
+    sub_folder = "feb28_2026"
 
     plot_dir = os.path.join(jax_numerov_dir, main_folder, sub_folder)
 
